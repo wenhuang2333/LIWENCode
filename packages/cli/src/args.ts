@@ -19,25 +19,30 @@ export interface CliArgs {
 export const USAGE = `liwen — LIWENCode coding agent CLI (v0.1 internal)
 
 Usage:
-  liwen [options] [prompt]        start with an initial prompt
-  liwen -p "prompt"                non-interactive run, print result, exit
-  liwen exec "prompt"              same as -p
-  liwen doctor                     environment & config diagnostics
-  liwen config list|get <key>      inspect effective configuration
+  liwen [options] [prompt]        进入交互模式；带 prompt 则作为首轮输入
+  liwen -p "prompt"                非交互运行，输出结果后退出
+  liwen exec "prompt"              同 -p
+  liwen doctor                     环境与配置诊断
+  liwen config list|get|path       查看生效配置
   liwen --version | --help
 
+交互模式内：
+  /help /model /permissions /status /cost /tools /compact /clear /resume /doctor /exit
+  @路径          引用文件作为上下文      !命令  执行 shell（经权限审批）
+  Ctrl+C        生成中=取消本轮；空闲时按两次=退出
+  完整指令集见 docs/COMMANDS.md
+
 Options:
-  -p, --print                      non-interactive execution
-  --output-format <text|json|stream-json>   result format (default text)
-  -m, --model <provider:name>      e.g. mock:test, openai-compatible:gpt-4o-mini,
-                                   deepseek:deepseek-chat, anthropic:claude-sonnet-4
+  -p, --print                      非交互执行
+  --output-format <text|json|stream-json>   结果格式（默认 text）
+  -m, --model <provider:model>      如 mock:default、deepseek:deepseek-chat、anthropic:claude-sonnet-4
       --permission-mode <mode>     default | acceptEdits | plan | bypass
-      --allowed-tools <patterns>   space-separated tool names/globs
-      --disallowed-tools <pats>    deny overrides (cannot relax built-in denies)
-      --max-turns <n>              turn limit (exit code 4 on breach)
-      --max-budget-usd <amount>    cost cap
-      --cwd <path>                 workspace directory
-      --verbose                    diagnostics on stderr
+      --allowed-tools <patterns>   空格分隔的工具名/通配符
+      --disallowed-tools <pats>    拒绝覆盖（不可放宽内置硬拒绝）
+      --max-turns <n>              轮次上限（触发出码 4）
+      --max-budget-usd <amount>    费用上限
+      --cwd <path>                 工作区目录
+      --verbose                    stderr 诊断
 `;
 
 export function parseArgs(argv: string[]): CliArgs {

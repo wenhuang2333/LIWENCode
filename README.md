@@ -12,9 +12,9 @@ TypeScript coding-agent harness library + reference CLI. Model-neutral, embeddab
 | `@liwencode/providers` | OpenAI Chat Completions adapter (DeepSeek-compatible) + native Anthropic Messages adapter; SSE streaming, normalized events, error mapping |
 | `@liwencode/tools` | read / write / edit / glob / grep / bash with read-before-write fencing (BR-004), unique-match edits (BR-005), .gitignore-aware search, restricted shell |
 | `@liwencode/testing` | MemoryRuntime (fully in-memory), MockProvider (scripted), provider contract suite (G2: same suite over all providers) |
-| `liwencode` (CLI) | `liwen -p`/`exec` non-interactive runs, `--output-format text/json/stream-json`, `doctor`, `config`, BR-042 exit codes. Interactive TUI lands in M2. |
+| `liwencode` (CLI) | **交互模式 REPL**（流式渲染、终端权限审批 y/s/n、Ctrl+C 取消、@路径 引用、!命令 经闸门执行）+ 斜杠命令 `/help /model /permissions /status /cost /tools /compact /clear /resume /doctor /exit`，非交互 `-p`/`exec` 与 `--output-format text/json/stream-json`，BR-042 退出码。完整参考：`docs/COMMANDS.md` |
 
-Out of v0.1 scope (per WBS): TUI, session resume UI, auto-compaction, MCP, decision plane (JEV), three-role orchestration, /goal.
+Out of v0.1 scope (per WBS): full TUI (Ink)、自动压缩、MCP、决策层 (JEV)、三角色编排、/goal。
 
 ## Commands
 
@@ -28,6 +28,7 @@ corepack pnpm lint:registry    # error-registry governance checks
 # CLI smoke (offline):
 corepack pnpm exec tsx packages/cli/src/main.ts --version
 corepack pnpm exec tsx packages/cli/src/main.ts doctor
+corepack pnpm exec tsx packages/cli/src/main.ts          # 交互模式（/help 查看命令）
 corepack pnpm exec tsx packages/cli/src/main.ts -p "hello" --output-format stream-json
 ```
 

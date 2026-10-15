@@ -1,19 +1,21 @@
 # LIWENCode v0.1 测试报告
 
-- **版本**：v0.1.0（内部版，对应 WBS M0+M1，未发布）
-- **日期**：2026-10-16
+- **版本**：v0.1.0（内部版，对应 WBS M0+M1，未发布；含交互式 CLI 增量）
+- **日期**：2026-10-16（交互命令集增量更新）
 - **环境**：macOS (darwin 25.5.0, arm64) / Node v24.15.0 / pnpm 12.11.2 / TypeScript 5.7 / Vitest 3.2
-- **结论**：✅ 全部通过 —— typecheck 0 错误、109/109 单元与合约测试、10/10 评测任务、CLI 冒烟全绿。测试过程发现并修复 8 项缺陷（见 §4）。
+- **结论**：✅ 全部通过 —— typecheck 0 错误、**125/125** 单元与合约测试（含 8 项管道式 REPL 冒烟）、10/10 评测任务、CLI 冒烟全绿。测试过程累计发现并修复 10 项缺陷（§4）。
+
+> 增量（交互命令集）：新增 `interactive.ts`（REPL：流式渲染/终端权限审批/@路径/!命令/Ctrl+C 取消）、`model-config.ts`（Provider 目录、配置持久化、0600 密钥文件）、`slash.ts`（命令解析与帮助）；`/model /permissions /status /cost /tools /compact /clear /resume /doctor /help /exit` 全套落地，`/agents /goal /mcp /rewind` 按里程碑占位。指令集文档见 `docs/COMMANDS.md`。
 
 ## 1. 测试范围与结果总览
 
 | 验证项 | 结果 | 数量 |
 | --- | --- | --- |
 | TypeScript 严格检查（`strict` + `exactOptionalPropertyTypes` + `noUncheckedIndexedAccess`） | ✅ 0 错误 | 5 包 |
-| 单元/合约测试（vitest） | ✅ 全部通过 | **109 通过 / 0 失败**（core 58、providers 18、tools 18、testing 9、cli 6） |
+| 单元/合约测试（vitest） | ✅ 全部通过 | **125 通过 / 0 失败**（core 58、providers 18、tools 18、testing 9、cli 22） |
 | 评测集（G1 种子，确定性 MockProvider 驱动真实内核） | ✅ 全部通过 | **10/10** |
 | 错误码注册表治理检查 | ✅ 通过 | 78 码、zh-CN 齐全、可重试 14、fatal 3、DEC-007 空缺保持 |
-| CLI 冒烟（真实进程） | ✅ 通过 | 7 项（见 §3） |
+| CLI 冒烟（真实进程） | ✅ 通过 | 交互式 + 非交互共 11 项 |
 
 ## 2. 各包测试明细
 
@@ -42,9 +44,15 @@
 
 MockProvider 请求记录与脚本耗尽语义（LW-PRV-007）；MemoryRuntime 种子/读写/外部修改注入/确定性时钟与 id。
 
-### 2.5 `liwencode` CLI（6 项）
+### 2.5 `liwencode` CLI（22 项）
 
-参数解析（-p/exec/--output-format/--model/工具名单/限额）；非法参数与非法枚举含 LW-CLI-001 提示；退出码映射（BR-042：完成 0、上限 4）；doctor 无密钥可运行、不打印密钥值、检查项齐全（FR-173）。
+参数解析（-p/exec/--output-format/--model/工具名单/限额）；非法参数与非法枚举含 LW-CLI-001 提示；退出码映射（BR-042）；doctor 无密钥可运行、不打印密钥值（FR-173）。
+
+**交互命令集增量（16 项新增）**：
+
+- **斜杠解析与帮助（纯逻辑）**：命令/参数解析（含空格规整）；/help 覆盖全部 v0.1 命令并标注 M2+/M3+/M4+ 计划项；单命令帮助与未知命令提示。
+- **模型配置（FR-121 安全边界）**：Provider 目录完整性（4 个、密钥环境变量映射）；env 文件解析（注释/引号/空行）与序列化往返；`writeEnvFile` 落盘权限恰为 0600；用户配置读写往返；默认模型解析优先级 flag > env > 已保存配置；`keyStatusOf` 能从密钥文件探测就绪状态；`maskKey` 永不泄露完整值。
+- **管道式 REPL 冒烟（真实子进程 + 隔离 HOME）**：横幅 + /help + /status + /exit；mock 对话流式渲染回复；**无人值守权限策略**——管道下 write 工具被自动拒绝且输出 LW-CLI-002 说明（BR-042）；/model show 与 /model list 渲染目录与密钥状态；/permissions 展示并切换模式；`!echo` 只读命令放行执行、`!rm -rf /` 危险命令以 LW-PERM-004 拒绝（BR-006）；/mcp /goal 占位提示明确；/doctor 与子命令一致。
 
 ## 3. 评测与冒烟
 
@@ -69,7 +77,7 @@ MockProvider 请求记录与脚本耗尽语义（LW-PRV-007）；MemoryRuntime �
 
 `--version` ✓；`doctor`（12 项检查，无密钥环境正常，不泄露值）✓；`-p` mock text 输出 exit=0 ✓；`--output-format stream-json` 每行含 schemaVersion/sessionId/ts ✓；`--output-format json` 输出版本化结果对象 ✓；非法参数 exit=2 ✓；**真实工作区端到端**（read 工具读真实文件 → mock 汇报 → exit=0）✓。
 
-## 4. 测试驱动的修复与优化（8 项）
+## 4. 测试驱动的修复与优化（10 项）
 
 | # | 发现 | 修复 |
 | --- | --- | --- |
@@ -81,6 +89,8 @@ MockProvider 请求记录与脚本耗尽语义（LW-PRV-007）；MemoryRuntime �
 | 6 | `echo hi > out.txt` 被分类为只读（重定向未优先判断） | 重定向检查移到只读白名单之前 |
 | 7 | `checkSubject` 不做命令分类，plan 模式误拒 `ls` 类命令 | 分类逻辑内联到引擎入口（FR-043 语义） |
 | 8 | `@liwencode/testing` 主入口引入 vitest，导致 evals 等纯 tsx 运行时崩溃 | 合约套件拆到 `@liwencode/testing/contract` 子路径 |
+| 9 | **REPL 冒烟发现**：管道输入 EOF 触发 readline `close` 后，`rl.prompt()` 抛 "readline was closed"，后续命令全部丢失 | 全部 prompt/question 调用走 `safePrompt` 关闭守卫；审批器在输入关闭时按拒绝返回 |
+| 10 | 流式渲染缺失：循环只发 message.complete，UI 无法增量显示 | 循环转发 provider block_delta 为 `text.delta` 事件（ADR-02），REPL 增量渲染 |
 
 ## 5. 已知限制（v0.1 范围外，按 WBS 顺延）
 
@@ -94,7 +104,10 @@ MockProvider 请求记录与脚本耗尽语义（LW-PRV-007）；MemoryRuntime �
 ```bash
 corepack pnpm install
 corepack pnpm typecheck      # 0 errors
-corepack pnpm test           # 109 passed
+corepack pnpm test           # 125 passed
 corepack pnpm lint:registry  # 78 codes OK
 corepack pnpm test:evals     # 10/10
+
+# 交互模式冒烟（无需密钥）
+printf '/help\n/model list\n/status\n/exit\n' | corepack pnpm exec tsx packages/cli/src/main.ts
 ```

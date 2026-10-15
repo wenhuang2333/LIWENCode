@@ -178,6 +178,11 @@ export function createAgent(config: AgentConfig): Agent {
               assistant = ev.message;
               assistantStopReason = ev.stopReason;
             }
+            // Forward content increments for streaming UIs (ADR-02).
+            if (ev.type === 'block_delta') {
+              bus.emit({ type: 'text.delta', text: ev.delta });
+              yield { type: 'text.delta', text: ev.delta };
+            }
             if (ev.type === 'usage') {
               totalUsage.inputTokens += ev.usage.inputTokens;
               totalUsage.outputTokens += ev.usage.outputTokens;

@@ -3,10 +3,16 @@ import { loadConfig, nodeRuntime, LiwenError } from '@liwencode/core';
 import { USAGE, parseArgs, UsageError } from './args';
 import { EXIT_OK, EXIT_USAGE, runPrint } from './run';
 import { formatDoctor, runDoctor } from './doctor';
+import { runInteractive } from './interactive';
+import { loadSecretsIntoEnv } from './model-config';
 
 export const VERSION = 'liwen v0.1.0 (LIWENCode internal, M0+M1)';
 
 async function main(argv: string[]): Promise<number> {
+  // Merge ~/.liwencode/env (0600) into process env first — never overrides
+  // real env vars; secrets never reach sessions or logs (BR-023/FR-121).
+  loadSecretsIntoEnv();
+
   let args;
   try {
     args = parseArgs(argv);
@@ -56,11 +62,8 @@ async function main(argv: string[]): Promise<number> {
   // agent run
   const prompt = args.positional.join(' ');
   if (!args.print) {
-    // v0.1 has no TUI yet (M2 scope); steer interactive use to -p.
-    process.stderr.write(
-      `Interactive TUI arrives in M2. For now use: liwen -p "<prompt>"\n\n${USAGE}`,
-    );
-    return EXIT_USAGE;
+    // Interactive REPL; a positional prompt (liwen "解释项目") seeds turn 1.
+    return runInteractive({ args, ...(prompt !== '' ? { initialPrompt: prompt } : {}) });
   }
   if (prompt === '') {
     process.stderr.write(`-p/exec requires a prompt (LW-CLI-001)\n`);
