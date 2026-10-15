@@ -1,0 +1,28 @@
+{
+  "name": "liwencode-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "LIWENCode — TypeScript coding-agent harness library + reference CLI (v0.1 internal, M0+M1)",
+  "type": "module",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@12.11.2",
+  "engines": {
+    "node": ">=22"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  },
+  "scripts": {
+    "build": "pnpm -r --filter './packages/*' run build",
+    "typecheck": "pnpm -r --filter './packages/*' run typecheck",
+    "test": "pnpm -r --filter './packages/*' run test",
+    "test:evals": "pnpm exec tsx evals/run-eval.ts",
+    "lint:registry": "pnpm exec tsx scripts/check-error-registry.ts"
+  },
+  "devDependencies": {
+    "@liwencode/core": "workspace:*",
+    "@liwencode/testing": "workspace:*",
+    "@liwencode/tools": "workspace:*",
+    "tsx": "^4.19.0"
+  }
+}

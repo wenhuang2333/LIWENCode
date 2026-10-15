@@ -1,0 +1,28 @@
+{
+  "name": "liwencode",
+  "version": "0.1.0",
+  "description": "LIWENCode reference CLI (liwen). v0.1: non-interactive -p/exec, doctor, config.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "bin": {
+    "liwen": "./src/main.ts"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@liwencode/core": "workspace:*",
+    "@liwencode/providers": "workspace:*",
+    "@liwencode/testing": "workspace:*",
+    "@liwencode/tools": "workspace:*",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
+    "tsx": "^4.19.0"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "@liwencode/providers",
+  "version": "0.1.0",
+  "description": "LIWENCode provider adapters: OpenAI-compatible (DeepSeek etc.) and native Anthropic Messages",
+  "type": "module",
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./openai-compatible": "./src/openai-compatible.ts",
+    "./anthropic": "./src/anthropic.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@liwencode/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@liwencode/testing": "workspace:*",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
