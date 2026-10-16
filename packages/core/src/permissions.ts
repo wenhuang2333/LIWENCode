@@ -164,7 +164,25 @@ export class PermissionEngine {
   /** Path fence (BR-003): realpath first; outside all roots → not fenced. */
   async insideWorkspace(path: string): Promise<boolean> {
     const resolved = await this.resolve(path);
-    return this.opts.workspaceRoots.some((root) => resolved === root || resolved.startsWith(`${root}/`));
+    const roots = await this.realRoots();
+    return roots.some((root) => resolved === root || resolved.startsWith(`${root}/`));
+  }
+
+  /** Roots realpath-normalized once (macOS /var → /private/var etc.). */
+  private cachedRealRoots?: string[];
+  private async realRoots(): Promise<string[]> {
+    if (this.cachedRealRoots === undefined) {
+      const normalized: string[] = [];
+      for (const root of this.opts.workspaceRoots) {
+        try {
+          normalized.push(await this.opts.runtime.fs.realpath(root));
+        } catch {
+          normalized.push(root);
+        }
+      }
+      this.cachedRealRoots = normalized;
+    }
+    return this.cachedRealRoots;
   }
 
   async resolve(path: string): Promise<string> {
@@ -239,6 +257,16 @@ export class PermissionEngine {
       case 'plan':
         if (effRisk === 'read') return { outcome: 'allow' };
         return deny('LW-PERM-001', 'Plan mode only permits read-only tools.');
+      case 'strict':
+        // Strictest tier: even reads ask (CLI default when launched bare).
+        return await this.resolveAsk(
+          toolName,
+          effRisk,
+          subject,
+          effRisk === 'read'
+            ? 'Strict mode confirms every operation, including reads.'
+            : `Strict mode: tool '${toolName}' is a ${effRisk}-level operation.`,
+        );
       case 'acceptEdits': {
         if (effRisk === 'read') return { outcome: 'allow' };
         if (effRisk === 'write' && subject.path !== undefined) {

@@ -6,7 +6,13 @@ import type { SerializedError } from './errors/liwen-error';
  * Subscribers must never mutate the objects they receive.
  */
 
-export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypass';
+/**
+ * Permission modes. Strictness ladder:
+ * strict (everything asks) < default (reads pass, writes/exec ask)
+ * < acceptEdits (workspace writes also pass) < plan (read-only)
+ * and bypass (everything passes; dangerous-command library still denies, BR-006).
+ */
+export type PermissionMode = 'strict' | 'default' | 'acceptEdits' | 'plan' | 'bypass';
 
 export type EndReason =
   | 'completed'

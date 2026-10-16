@@ -1,21 +1,21 @@
 # LIWENCode v0.1 测试报告
 
-- **版本**：v0.1.0（内部版，对应 WBS M0+M1，未发布；含交互式 CLI 增量）
-- **日期**：2026-10-16（交互命令集增量更新）
+- **版本**：v0.1.0（内部版，对应 WBS M0+M1，未发布；含交互式 CLI 与权限三档增量）
+- **日期**：2026-10-16（权限三档增量更新）
 - **环境**：macOS (darwin 25.5.0, arm64) / Node v24.15.0 / pnpm 12.11.2 / TypeScript 5.7 / Vitest 3.2
-- **结论**：✅ 全部通过 —— typecheck 0 错误、**125/125** 单元与合约测试（含 8 项管道式 REPL 冒烟）、10/10 评测任务、CLI 冒烟全绿。测试过程累计发现并修复 10 项缺陷（§4）。
+- **结论**：✅ 全部通过 —— typecheck 0 错误、**132/132** 单元与合约测试（含 13 项管道式 REPL 冒烟）、10/10 评测任务。测试过程累计发现并修复 12 项缺陷（§4）。
 
-> 增量（交互命令集）：新增 `interactive.ts`（REPL：流式渲染/终端权限审批/@路径/!命令/Ctrl+C 取消）、`model-config.ts`（Provider 目录、配置持久化、0600 密钥文件）、`slash.ts`（命令解析与帮助）；`/model /permissions /status /cost /tools /compact /clear /resume /doctor /help /exit` 全套落地，`/agents /goal /mcp /rewind` 按里程碑占位。指令集文档见 `docs/COMMANDS.md`。
+> 增量（权限三档）：新增 `strict` 权限模式（core 引擎一级模式：一切操作含读取都需确认）；CLI 新增 `--HuangAura`（读取免确认，写/删/执行需确认）与 `--WenNova`（文件增删改查读全免确认）档位参数，二者互斥；无参数启动默认严格档；优先级 `--permission-mode > 档位 > 用户配置 > strict`；REPL 横幅与 `/permissions` 显示当前档位。修复 macOS realpath（/var vs /private/var）导致临时目录工作区被判越界的缺陷。
 
 ## 1. 测试范围与结果总览
 
 | 验证项 | 结果 | 数量 |
 | --- | --- | --- |
 | TypeScript 严格检查（`strict` + `exactOptionalPropertyTypes` + `noUncheckedIndexedAccess`） | ✅ 0 错误 | 5 包 |
-| 单元/合约测试（vitest） | ✅ 全部通过 | **125 通过 / 0 失败**（core 58、providers 18、tools 18、testing 9、cli 22） |
+| 单元/合约测试（vitest） | ✅ 全部通过 | **132 通过 / 0 失败**（core 59、providers 18、tools 18、testing 9、cli 28） |
 | 评测集（G1 种子，确定性 MockProvider 驱动真实内核） | ✅ 全部通过 | **10/10** |
 | 错误码注册表治理检查 | ✅ 通过 | 78 码、zh-CN 齐全、可重试 14、fatal 3、DEC-007 空缺保持 |
-| CLI 冒烟（真实进程） | ✅ 通过 | 交互式 + 非交互共 11 项 |
+| CLI 冒烟（真实进程） | ✅ 通过 | 交互式 + 非交互共 13 项 |
 
 ## 2. 各包测试明细
 
@@ -77,7 +77,7 @@ MockProvider 请求记录与脚本耗尽语义（LW-PRV-007）；MemoryRuntime �
 
 `--version` ✓；`doctor`（12 项检查，无密钥环境正常，不泄露值）✓；`-p` mock text 输出 exit=0 ✓；`--output-format stream-json` 每行含 schemaVersion/sessionId/ts ✓；`--output-format json` 输出版本化结果对象 ✓；非法参数 exit=2 ✓；**真实工作区端到端**（read 工具读真实文件 → mock 汇报 → exit=0）✓。
 
-## 4. 测试驱动的修复与优化（10 项）
+## 4. 测试驱动的修复与优化（12 项）
 
 | # | 发现 | 修复 |
 | --- | --- | --- |
@@ -91,6 +91,8 @@ MockProvider 请求记录与脚本耗尽语义（LW-PRV-007）；MemoryRuntime �
 | 8 | `@liwencode/testing` 主入口引入 vitest，导致 evals 等纯 tsx 运行时崩溃 | 合约套件拆到 `@liwencode/testing/contract` 子路径 |
 | 9 | **REPL 冒烟发现**：管道输入 EOF 触发 readline `close` 后，`rl.prompt()` 抛 "readline was closed"，后续命令全部丢失 | 全部 prompt/question 调用走 `safePrompt` 关闭守卫；审批器在输入关闭时按拒绝返回 |
 | 10 | 流式渲染缺失：循环只发 message.complete，UI 无法增量显示 | 循环转发 provider block_delta 为 `text.delta` 事件（ADR-02），REPL 增量渲染 |
+| 11 | **三档冒烟发现**：macOS 上 `--cwd` 指向 `/var/folders/...` 临时目录时，realpath 返回 `/private/var/...`，与未规范化的 workspaceRoot 不匹配 → 误判"工作区外"（LW-PERM-003） | 权限引擎对 workspaceRoots 做一次性 realpath 规范化后缓存再比较 |
+| 12 | 档位断言与固定横幅文案冲突（管道模式提示恒含"无人值守"字样） | 断言改用 `LW-CLI-002` 作为实际拒绝标记（测试侧修正，同时印证横幅提示与真实拒绝可区分） |
 
 ## 5. 已知限制（v0.1 范围外，按 WBS 顺延）
 
@@ -104,7 +106,7 @@ MockProvider 请求记录与脚本耗尽语义（LW-PRV-007）；MemoryRuntime �
 ```bash
 corepack pnpm install
 corepack pnpm typecheck      # 0 errors
-corepack pnpm test           # 125 passed
+corepack pnpm test           # 132 passed
 corepack pnpm lint:registry  # 78 codes OK
 corepack pnpm test:evals     # 10/10
 

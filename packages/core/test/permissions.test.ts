@@ -68,6 +68,35 @@ describe('rule precedence (BR-001)', () => {
 });
 
 describe('permission modes (BR-001/BR-002 semantics)', () => {
+  it('strict mode asks for everything, including reads (three-tier CLI default)', async () => {
+    const e = engine({ mode: 'strict' });
+    const read = await e.checkSubject('read', 'read', { path: '/ws/a.txt' });
+    expect(read.outcome).toBe('deny'); // ask → no handler → deny
+    if (read.outcome === 'deny') expect(read.error.code).toBe('LW-PERM-005');
+
+    let sawReadRequest = false;
+    const e2 = engine({
+      mode: 'strict',
+      onRequest: async (req) => {
+        sawReadRequest = req.risk === 'read';
+        return { decision: 'allow' };
+      },
+    });
+    const readAllowed = await e2.checkSubject('read', 'read', { path: '/ws/a.txt' });
+    expect(sawReadRequest).toBe(true);
+    expect(readAllowed.outcome).toBe('allow');
+
+    // explicit allow rule still beats the strict default
+    const ruleBack = await engine({
+      mode: 'strict',
+      rules: [{ effect: 'allow', tool: 'read', source: 'user' }],
+    }).checkSubject('read', 'read', { path: '/ws/a.txt' });
+    expect(ruleBack.outcome).toBe('allow');
+
+    // dangerous commands stay denied regardless of mode (BR-006)
+    expect((await e.checkSubject('bash', 'exec', { command: 'rm -rf /' })).outcome).toBe('deny');
+  });
+
   it('plan mode only allows read risk', async () => {
     const e = engine({ mode: 'plan' });
     expect((await e.checkSubject('read', 'read', {})).outcome).toBe('allow');

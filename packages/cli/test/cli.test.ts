@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseArgs, UsageError } from '../src/args';
+import { parseArgs, resolvePermissionTier, UsageError } from '../src/args';
 import { runDoctor } from '../src/doctor';
 import { exitCodeFor, EXIT_LIMIT, EXIT_OK, EXIT_PERM } from '../src/run';
 import type { RunSummary } from '@liwencode/core';
@@ -42,6 +42,32 @@ describe('parseArgs (FR-135 subset)', () => {
     expect(args.maxTurns).toBe(5);
     expect(args.maxBudgetUsd).toBe(0.5);
     expect(args.model).toBe('mock:default');
+  });
+});
+
+describe('three-tier permission flags', () => {
+  it('parses --WenNova / --HuangAura (case variants) and rejects mixing them', () => {
+    expect(parseArgs(['--WenNova']).wenNova).toBe(true);
+    expect(parseArgs(['--HuangAura']).huangAura).toBe(true);
+    expect(parseArgs(['--wennova']).wenNova).toBe(true);
+    expect(parseArgs(['--huang-aura']).huangAura).toBe(true);
+    expect(() => parseArgs(['--WenNova', '--HuangAura'])).toThrow(/mutually exclusive/);
+  });
+
+  it('resolvePermissionTier maps the ladder: bare→strict, HuangAura→default(reads pass), WenNova→bypass', () => {
+    expect(resolvePermissionTier({ wenNova: false, huangAura: false })).toEqual({
+      mode: 'strict',
+      tier: 'strict',
+      source: 'default',
+    });
+    expect(resolvePermissionTier({ wenNova: false, huangAura: true }).mode).toBe('default');
+    expect(resolvePermissionTier({ wenNova: true, huangAura: false }).mode).toBe('bypass');
+    // explicit --permission-mode wins over tier flags
+    expect(resolvePermissionTier({ permissionMode: 'plan', wenNova: true, huangAura: false }).mode).toBe('plan');
+    // saved user config beats the bare default
+    expect(resolvePermissionTier({ wenNova: false, huangAura: false }, 'acceptEdits').mode).toBe('acceptEdits');
+    // --permission-mode now accepts strict
+    expect(parseArgs(['--permission-mode', 'strict']).permissionMode).toBe('strict');
   });
 });
 

@@ -32,7 +32,7 @@ export const configSchema = z.object({
       baseUrl: z.string().url().optional(),
     })
     .optional(),
-  permissionMode: z.enum(['default', 'acceptEdits', 'plan', 'bypass']).default('default'),
+  permissionMode: z.enum(['strict', 'default', 'acceptEdits', 'plan', 'bypass']).default('strict'),
   rules: z.array(permissionRuleSchema).default([]),
   extraDirs: z.array(z.string()).default([]),
   limits: z

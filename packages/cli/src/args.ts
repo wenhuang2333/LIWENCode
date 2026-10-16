@@ -5,7 +5,11 @@ export interface CliArgs {
   print: boolean;
   outputFormat: 'text' | 'json' | 'stream-json';
   model?: string;
-  permissionMode?: 'default' | 'acceptEdits' | 'plan' | 'bypass';
+  permissionMode?: 'strict' | 'default' | 'acceptEdits' | 'plan' | 'bypass';
+  /** Full-permission tier shortcut (maps to bypass). */
+  wenNova: boolean;
+  /** Partial-permission tier shortcut (reads pass, writes/exec ask; maps to default). */
+  huangAura: boolean;
   allowedTools: string[];
   disallowedTools: string[];
   maxTurns?: number;
@@ -14,6 +18,36 @@ export interface CliArgs {
   verbose: boolean;
   command?: 'exec' | 'doctor' | 'config' | 'version' | 'help';
   configSub?: 'list' | 'get' | 'path';
+}
+
+export type PermissionTier = 'strict' | 'HuangAura' | 'WenNova' | 'acceptEdits' | 'plan';
+
+/**
+ * Three-tier permission mapping:
+ *  - no flag  → strict    一切操作（含读取）都需用户确认
+ *  - --HuangAura → default 读取免确认；写/删/执行需确认
+ *  - --WenNova   → bypass  文件增删改查读全部免确认（危险命令库仍拒绝，BR-006）
+ * Precedence: --permission-mode > tier flag > saved user config > strict.
+ */
+export function resolvePermissionTier(
+  args: Pick<CliArgs, 'permissionMode' | 'wenNova' | 'huangAura'>,
+  savedMode?: 'strict' | 'default' | 'acceptEdits' | 'plan' | 'bypass',
+): { mode: 'strict' | 'default' | 'acceptEdits' | 'plan' | 'bypass'; tier: PermissionTier; source: string } {
+  if (args.permissionMode !== undefined) {
+    return { mode: args.permissionMode, tier: tierOfMode(args.permissionMode), source: '--permission-mode' };
+  }
+  if (args.wenNova) return { mode: 'bypass', tier: 'WenNova', source: '--WenNova' };
+  if (args.huangAura) return { mode: 'default', tier: 'HuangAura', source: '--HuangAura' };
+  if (savedMode !== undefined) return { mode: savedMode, tier: tierOfMode(savedMode), source: 'user-config' };
+  return { mode: 'strict', tier: 'strict', source: 'default' };
+}
+
+function tierOfMode(mode: 'strict' | 'default' | 'acceptEdits' | 'plan' | 'bypass'): PermissionTier {
+  switch (mode) {
+    case 'bypass': return 'WenNova';
+    case 'default': return 'HuangAura';
+    default: return mode; // strict | acceptEdits | plan pass through as their own label
+  }
 }
 
 export const USAGE = `liwen — LIWENCode coding agent CLI (v0.1 internal)
@@ -32,11 +66,16 @@ Usage:
   Ctrl+C        生成中=取消本轮；空闲时按两次=退出
   完整指令集见 docs/COMMANDS.md
 
+权限档位（三选一，互斥）：
+  （无参数）                     严格档：一切操作（含读取）都需用户确认
+      --HuangAura                部分权限：读取免确认；写、删、执行仍需确认
+      --WenNova                  完全权限：文件增删改查读均免确认（危险命令仍拒绝）
+  也可用 --permission-mode <strict|default|acceptEdits|plan|bypass> 精确指定
+
 Options:
   -p, --print                      非交互执行
   --output-format <text|json|stream-json>   结果格式（默认 text）
   -m, --model <provider:model>      如 mock:default、deepseek:deepseek-chat、anthropic:claude-sonnet-4
-      --permission-mode <mode>     default | acceptEdits | plan | bypass
       --allowed-tools <patterns>   空格分隔的工具名/通配符
       --disallowed-tools <pats>    拒绝覆盖（不可放宽内置硬拒绝）
       --max-turns <n>              轮次上限（触发出码 4）
@@ -50,6 +89,8 @@ export function parseArgs(argv: string[]): CliArgs {
     positional: [],
     print: false,
     outputFormat: 'text',
+    wenNova: false,
+    huangAura: false,
     allowedTools: [],
     disallowedTools: [],
     verbose: false,
@@ -109,12 +150,24 @@ export function parseArgs(argv: string[]): CliArgs {
         break;
       case '--permission-mode': {
         const v = next(a);
-        if (v !== 'default' && v !== 'acceptEdits' && v !== 'plan' && v !== 'bypass') {
+        if (v !== 'strict' && v !== 'default' && v !== 'acceptEdits' && v !== 'plan' && v !== 'bypass') {
           throw new UsageError(`invalid --permission-mode '${v}' (LW-CLI-001)`);
         }
         args.permissionMode = v;
         break;
       }
+      case '--WenNova':
+      case '--wennova':
+      case '--wen-nova':
+        args.wenNova = true;
+        if (args.huangAura) throw new UsageError('--WenNova and --HuangAura are mutually exclusive (LW-CLI-001)');
+        break;
+      case '--HuangAura':
+      case '--huangaura':
+      case '--huang-aura':
+        args.huangAura = true;
+        if (args.wenNova) throw new UsageError('--WenNova and --HuangAura are mutually exclusive (LW-CLI-001)');
+        break;
       case '--allowed-tools':
         args.allowedTools.push(...untilNextFlag());
         break;

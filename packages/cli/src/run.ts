@@ -12,6 +12,8 @@ import { createBuiltinTools } from '@liwencode/tools';
 import { createOpenAICompatibleProvider, createAnthropicProvider } from '@liwencode/providers';
 import { MockProvider } from '@liwencode/testing';
 import type { CliArgs } from './args';
+import { resolvePermissionTier } from './args';
+import { readUserConfig } from './model-config';
 import { resolveProvider } from './provider-select';
 
 /** BR-042 exit codes. */
@@ -48,11 +50,12 @@ export async function runPrint(args: CliArgs, prompt: string): Promise<number> {
 
   const provider = resolveProvider(args, { mockProvider: (script) => new MockProvider({ script }) });
   const { tools } = createBuiltinTools();
+  const tier = resolvePermissionTier(args, readUserConfig().permissionMode);
 
   // Headless permission policy (BR-042): ask → deny with a clear note.
   const headlessHandler: PermissionHandler = async (req) => ({
     decision: 'deny',
-    message: `Non-interactive run: '${req.tool}' needs approval; headless ask resolves to deny (LW-CLI-002). Pre-approve via --allowed-tools or run interactively.`,
+    message: `Non-interactive run: '${req.tool}' needs approval; headless ask resolves to deny (LW-CLI-002). Pre-approve via --allowed-tools, raise the tier (--HuangAura/--WenNova), or run interactively.`,
   });
 
   const agent: Agent = createAgent({
@@ -60,7 +63,7 @@ export async function runPrint(args: CliArgs, prompt: string): Promise<number> {
     model: provider.model,
     cwd: args.cwd ?? process.cwd(),
     tools,
-    ...(args.permissionMode !== undefined ? { permissionMode: args.permissionMode } : {}),
+    permissionMode: tier.mode,
     permissionHandler: headlessHandler,
     limits: {
       ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns } : {}),

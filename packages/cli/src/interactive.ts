@@ -19,6 +19,7 @@ import {
 } from '@liwencode/core';
 import { createBuiltinTools } from '@liwencode/tools';
 import type { CliArgs } from './args';
+import { resolvePermissionTier } from './args';
 import { buildProvider, type ProviderSpec } from './provider-select';
 import { helpText, parseSlash } from './slash';
 import {
@@ -75,7 +76,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const resolved = resolveDefaultModel(opts.args.model);
     return { provider: resolved.provider, model: resolved.name };
   })();
-  let permissionMode: PermissionMode = opts.args.permissionMode ?? readUserConfig().permissionMode ?? 'default';
+  const tier = resolvePermissionTier(opts.args, readUserConfig().permissionMode);
+  let permissionMode: PermissionMode = tier.mode;
   let pendingResume: string | undefined;
   const sessionRules: PermissionRule[] = [
     ...opts.args.allowedTools.map((tool) => ({ effect: 'allow' as const, tool, source: 'user' as const })),
@@ -432,7 +434,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         : '  (无临时规则)';
       output.write(
         [
-          `权限模式: ${ANSI.bold(agent.engine.mode)}（default/acceptEdits/plan/bypass，bypass 仅用户级可启用）`,
+          `权限模式: ${ANSI.bold(agent.engine.mode)}（当前档位: ${tierLabelOf(agent.engine.mode)}）`,
           '临时规则:',
           rules,
           '调整: /permissions mode <mode> | /permissions allow <tool|pattern> | /permissions deny <tool|pattern>',
@@ -442,8 +444,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }
     if (args[0] === 'mode') {
       const mode = args[1];
-      if (mode !== 'default' && mode !== 'acceptEdits' && mode !== 'plan' && mode !== 'bypass') {
-        output.write(ANSI.yellow('模式必须为 default | acceptEdits | plan | bypass\n'));
+      if (mode !== 'strict' && mode !== 'default' && mode !== 'acceptEdits' && mode !== 'plan' && mode !== 'bypass') {
+        output.write(ANSI.yellow('模式必须为 strict | default | acceptEdits | plan | bypass\n'));
         return;
       }
       agent.engine.setMode(mode);
@@ -548,7 +550,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     safePrompt();
   });
 
-  output.write(banner());
+  output.write(banner(tierLabelOf(tier.mode)));
   if (!isTTY) output.write(ANSI.dim('（检测到管道输入：权限请求将按无人值守策略自动拒绝）\n'));
 
   safePrompt();
@@ -591,12 +593,23 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
 class ExitRepl extends Error {}
 
-function banner(): string {
+function banner(tierText: string): string {
   return [
     ANSI.bold('LIWENCode v0.1 交互模式'),
+    ANSI.dim(`  权限档位: ${tierText}`),
     ANSI.dim('  /help 查看命令 · @文件 引用上下文 · !命令 执行 shell · Ctrl+C 取消/退出'),
     '',
   ].join('\n');
+}
+
+export function tierLabelOf(mode: 'strict' | 'default' | 'acceptEdits' | 'plan' | 'bypass'): string {
+  switch (mode) {
+    case 'strict': return '严格档：一切操作均需确认（--HuangAura 升级读取免确认，--WenNova 全免确认）';
+    case 'default': return '部分权限（--HuangAura）：读取免确认，写/删/执行需确认';
+    case 'acceptEdits': return 'acceptEdits：工作区内写入免确认';
+    case 'plan': return 'plan：仅只读';
+    case 'bypass': return '完全权限（--WenNova）：文件增删改查读免确认（危险命令仍拒绝）';
+  }
 }
 
 async function readFileSafe(path: string): Promise<string | undefined> {

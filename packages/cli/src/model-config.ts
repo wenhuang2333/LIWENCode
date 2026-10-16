@@ -85,7 +85,7 @@ export interface UserModelConfig {
 
 export interface UserConfigFile {
   model?: UserModelConfig;
-  permissionMode?: 'default' | 'acceptEdits' | 'plan' | 'bypass';
+  permissionMode?: 'strict' | 'default' | 'acceptEdits' | 'plan' | 'bypass';
 }
 
 export function readUserConfig(home?: string): UserConfigFile {

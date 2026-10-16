@@ -19,11 +19,26 @@
 
 ## 2. 全局参数（交互与非交互通用）
 
+### 权限三档（核心用法）
+
+| 启动方式 | 档位 | 行为 |
+| --- | --- | --- |
+| `liwen`（无参数） | **严格档（默认）** | 一切操作（含读取）都需用户逐条确认；非交互管道下按拒绝处理 |
+| `liwen --HuangAura` | **部分权限** | 读取类操作（read/glob/grep、`ls` 等只读命令）免确认；写、删、执行仍需确认 |
+| `liwen --WenNova` | **完全权限** | 文件增、删、改、查、读全部免确认，不询问用户（危险命令库仍拒绝，见下） |
+
+- 三档互斥：`--WenNova --HuangAura` 同用报 `LW-CLI-001`
+- 优先级：`--permission-mode` > 档位参数 > 用户配置（`~/.liwencode/config.json` 的 `permissionMode`）> 严格档
+- **安全底线不随档位放宽**：`rm -rf /`、`mkfs`、`git push --force`、格式化磁盘等危险命令在**任何档位（含 --WenNova）都默认拒绝**（BR-006），需要显式 `--allowed-tools` 用户级规则才可放行；`deny` 永远不能被模型提升为 `allow`
+- 档位只是免确认范围的变化；会话内可用 `/permissions mode` 临时调整（如切回 strict）
+
+### 其他参数
+
 | 参数 | 取值 | 说明 |
 | --- | --- | --- |
 | `-m, --model` | `<provider>:<model>` | 指定模型，如 `mock:default`、`deepseek:deepseek-chat`、`anthropic:claude-sonnet-4` |
-| `--permission-mode` | `default` / `acceptEdits` / `plan` / `bypass` | 权限模式；`bypass` 仅用户级配置可启用（BR-002），`plan` 仅允许只读操作 |
-| `--allowed-tools` | 工具名/通配符（空格分隔） | 预授权，如 `--allowed-tools read grep bash` |
+| `--permission-mode` | `strict` / `default` / `acceptEdits` / `plan` / `bypass` | 精确指定模式（`default` 即 HuangAura 行为、`bypass` 即 WenNova 行为、`strict` 为三档默认） |
+| `--allowed-tools` | 工具名/通配符（空格分隔） | 预授权，如 `--allowed-tools read grep`；在严格档下可放行读取 |
 | `--disallowed-tools` | 工具名/通配符 | 显式拒绝；不可放宽内置硬拒绝 |
 | `--max-turns` | 正整数 | 轮次上限，触发出码 4 |
 | `--max-budget-usd` | 金额 | 费用上限，触发出码 4 |
@@ -93,12 +108,12 @@
 
 | 用法 | 说明 |
 | --- | --- |
-| `/permissions` | 当前模式 + 本会话临时规则列表 |
-| `/permissions mode <m>` | 切换 `default`/`acceptEdits`/`plan`/`bypass` |
+| `/permissions` | 当前模式（含档位说明）+ 本会话临时规则列表 |
+| `/permissions mode <m>` | 切换 `strict`/`default`/`acceptEdits`/`plan`/`bypass`（等价于临时升降档） |
 | `/permissions allow <tool>` | 添加会话级放行规则（如 `/permissions allow write`、`/permissions allow mcp__github__*`） |
 | `/permissions deny <tool>` | 添加会话级拒绝规则 |
 
-规则语义（不可绕过）：`deny > ask > allow`；危险命令默认拒绝；项目级配置不能放宽用户级 deny（BR-024）；**任何模型输出都不能提升权限**。
+规则语义（不可绕过）：`deny > ask > allow`；危险命令任何档位默认拒绝；项目级配置不能放宽用户级 deny（BR-024）；**任何模型输出都不能提升权限**。档位（strict/HuangAura/WenNova）只是改变"哪些操作免确认"，不改变这些硬规则。
 
 ### 计划中的命令（当前为占位提示）
 
@@ -132,20 +147,22 @@
 ## 7. 常见示例
 
 ```bash
-# 离线体验（无需密钥）
-liwen doctor
-liwen                      # 进入交互 → /help
+# 严格档（默认）：每个操作都确认
+liwen
 
-# 配置并使用 DeepSeek
-liwen                      # /model config → 选 deepseek → 粘贴 key
-liwen -m deepseek:deepseek-chat "总结这个仓库的结构"
+# 部分权限：读免确认，写/删要确认
+liwen --HuangAura
+liwen --HuangAura -m deepseek:deepseek-chat "审查这个仓库"
+
+# 完全权限：文件增删改查读都不问（危险命令仍拒绝）
+liwen --WenNova "跑一遍测试并修复失败项"
 
 # 只读审查（plan 模式：写/执行一律拒绝）
 liwen --permission-mode plan "审查 src/agent.ts 的错误处理"
 
 # 脚本化使用
-cat error.log | liwen -p "分析报错原因" --output-format json
-liwen -p "跑一遍测试并修复失败项" --permission-mode acceptEdits --max-turns 20; echo "exit=$?"
+cat error.log | liwen -p "分析报错原因" --output-format json --HuangAura
+liwen -p "跑测试并修复" --WenNova --max-turns 20; echo "exit=$?"
 
 # 会话恢复
 liwen                      # /resume → 选择历史会话 → 继续对话
