@@ -13,6 +13,8 @@
     "onlyBuiltDependencies": ["esbuild"]
   },
   "scripts": {
+    "start": "tsx packages/cli/src/main.ts",
+    "cli": "tsx packages/cli/src/main.ts",
     "build": "pnpm -r --filter './packages/*' run build",
     "typecheck": "pnpm -r --filter './packages/*' run typecheck",
     "test": "pnpm -r --filter './packages/*' run test",

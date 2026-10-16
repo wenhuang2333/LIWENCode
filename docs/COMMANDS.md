@@ -18,6 +18,8 @@
 
 当前目录即工作区（可用 `--cwd` 覆盖）。首次使用建议先跑 `liwen doctor`，再用 `/model config` 配置模型。
 
+> **开发期运行形态（v0.1 未发布 npm）**：上述 `liwen` 均为 `cd code && corepack pnpm start`（或 `corepack pnpm exec tsx packages/cli/src/main.ts`）。**必须在 `code/` 目录内运行**——在上层目录运行 pnpm 会命中其他 package.json（如家目录里的无关项目），报 `Command "tsx" not found`。
+
 ## 2. 全局参数（交互与非交互通用）
 
 ### 权限三档（核心用法）

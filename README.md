@@ -18,19 +18,25 @@ Out of v0.1 scope (per WBS): 自动压缩、MCP、决策层 (JEV)、三角色编
 
 ## Commands
 
-```bash
-corepack pnpm install          # install (Node >= 22 required)
-corepack pnpm typecheck        # tsc --noEmit across packages (strict + exactOptionalPropertyTypes + noUncheckedIndexedAccess)
-corepack pnpm test             # vitest across packages
-corepack pnpm test:evals       # 10-task deterministic eval harness (no keys needed)
-corepack pnpm lint:registry    # error-registry governance checks
+**必须在 `code/` 目录内运行**（本仓库自身是 monorepo 根）。若在其上层目录运行 pnpm，pnpm 会向上层查找 package.json 并安装无关项目的依赖（例如误装到家目录的其他项目），导致 `Command "tsx" not found`。
 
-# CLI smoke (offline):
+```bash
+cd code                                        # ← 先进入本目录
+corepack pnpm install                          # install (Node >= 22 required)
+corepack pnpm typecheck                        # tsc --noEmit across packages (strict + exactOptionalPropertyTypes + noUncheckedIndexedAccess)
+corepack pnpm test                             # vitest across packages
+corepack pnpm test:evals                       # 10-task deterministic eval harness (no keys needed)
+corepack pnpm lint:registry                    # error-registry governance checks
+
+# CLI（开发运行形态；TUI 启动动画 + 常驻界面）：
+corepack pnpm start                            # 等价于 exec tsx packages/cli/src/main.ts
+corepack pnpm start --no-boot                  # 跳过启动动画
 corepack pnpm exec tsx packages/cli/src/main.ts --version
 corepack pnpm exec tsx packages/cli/src/main.ts doctor
-corepack pnpm exec tsx packages/cli/src/main.ts          # 交互模式（/help 查看命令）
 corepack pnpm exec tsx packages/cli/src/main.ts -p "hello" --output-format stream-json
 ```
+
+依赖构建脚本说明：pnpm ≥10 默认拦截依赖的 postinstall，本仓库已在 `pnpm-workspace.yaml` 放行 esbuild（`allowBuilds`）；若新增带安装脚本的依赖，运行 `corepack pnpm approve-builds` 审批。
 
 ## Design invariants (do not break)
 
