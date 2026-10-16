@@ -4,6 +4,7 @@ import { USAGE, parseArgs, UsageError } from './args';
 import { EXIT_OK, EXIT_USAGE, runPrint } from './run';
 import { formatDoctor, runDoctor } from './doctor';
 import { runInteractive } from './interactive';
+import { runTui } from './tui/tui';
 import { loadSecretsIntoEnv } from './model-config';
 
 export const VERSION = 'liwen v0.1.0 (LIWENCode internal, M0+M1)';
@@ -62,7 +63,12 @@ async function main(argv: string[]): Promise<number> {
   // agent run
   const prompt = args.positional.join(' ');
   if (!args.print) {
-    // Interactive REPL; a positional prompt (liwen "解释项目") seeds turn 1.
+    // TTY（交互终端）→ TUI：启动粒子动画 + 常驻输入界面（FR-137/TUI）；
+    // 非 TTY（管道）→ readline REPL：无动画、权限按无人值守策略拒绝（BR-042）。
+    const isTTY = process.stdin.isTTY === true && process.stdout.isTTY === true;
+    if (isTTY) {
+      return runTui({ args, ...(prompt !== '' ? { initialPrompt: prompt } : {}) });
+    }
     return runInteractive({ args, ...(prompt !== '' ? { initialPrompt: prompt } : {}) });
   }
   if (prompt === '') {

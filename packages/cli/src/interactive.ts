@@ -36,6 +36,7 @@ import {
   parseEnvFile,
 } from './model-config';
 import { formatDoctor, runDoctor } from './doctor';
+import { expandAtPaths, summarizeInput } from './prompt-utils';
 
 /**
  * Interactive REPL (FR-130 / FR-137 subset). Readline-based: streaming

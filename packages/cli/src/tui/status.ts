@@ -1,0 +1,175 @@
+/**
+ * 状态栏指标：当前模型 / 上下文已用 / 第几轮第几步 / 实时 token 输出速度 /
+ * 缓存命中率 / 总消耗 token。
+ *
+ * StatusTracker 消费 AgentEvent 累计指标（纯逻辑，可单测）；
+ * formatStatusLine 渲染为适配终端宽度的一行。
+ */
+
+import type { AgentEvent } from '@liwencode/core';
+import { displayWidth } from './width.js';
+
+export interface StatusModel {
+  model: string;
+  /** 模型上下文窗口上限（token）；未知时为 null */
+  contextWindow: number | null;
+}
+
+export interface StatusSnapshot {
+  model: string;
+  contextUsed: number;
+  contextWindow: number | null;
+  turn: number;
+  step: number;
+  /** 最近一次输出速度（tok/s）；无输出时为 null。流式期间为实时值。 */
+  tokensPerSecond: number | null;
+  /** 缓存命中率 cacheRead / (cacheRead + input)；无缓存数据时为 null */
+  cacheHitRate: number | null;
+  totalTokens: number;
+}
+
+/** 近似 token 估算：CJK 约 1 字 1 token，ASCII 约 4 字符 1 token */
+export function estimateTokensOfText(text: string): number {
+  let cjk = 0;
+  let other = 0;
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp >= 0x2e80 && cp <= 0x9fff) cjk++;
+    else other++;
+  }
+  return Math.round(cjk + other / 4);
+}
+
+const EPS = 1e-9;
+
+export class StatusTracker {
+  private model: string;
+  private contextWindow: number | null;
+  private turn = 0;
+  private step = 0;
+  private totalInput = 0;
+  private totalOutput = 0;
+  private totalCacheRead = 0;
+  private sawCacheField = false;
+  private lastSpeed: number | null = null;
+  // 流式实时速度
+  private streamStart: number | null = null;
+  private streamChars = 0;
+
+  constructor(model: StatusModel) {
+    this.model = model.model;
+    this.contextWindow = model.contextWindow;
+  }
+
+  setModel(model: StatusModel): void {
+    this.model = model.model;
+    this.contextWindow = model.contextWindow;
+  }
+
+  /** nowMs 用 Date.now()（生产）或注入（测试） */
+  onEvent(ev: AgentEvent, nowMs: number): void {
+    switch (ev.type) {
+      case 'turn.start':
+        this.turn = ev.turn;
+        break;
+      case 'tool.start':
+        this.step++;
+        break;
+      case 'text.delta':
+        if (this.streamStart === null) this.streamStart = nowMs;
+        this.streamChars += ev.text.length;
+        break;
+      case 'message.complete': {
+        // 一条 assistant 消息结束：以累计字符估算速度（估算器与 delta 计数一致）
+        if (this.streamStart !== null) {
+          const secs = Math.max(0.05, (nowMs - this.streamStart) / 1000);
+          const outTokens =
+            ev.message.content.find((b) => b.type === 'text' && 'text' in b)?.type === 'text'
+              ? estimateTokensOfText(
+                  ev.message.content
+                    .filter((b): b is Extract<typeof b, { type: 'text' }> => b.type === 'text')
+                    .map((b) => b.text)
+                    .join(''),
+                )
+              : this.streamChars / 4;
+          if (outTokens > 0) this.lastSpeed = Math.round((outTokens / secs) * 10) / 10;
+        }
+        this.streamStart = null;
+        this.streamChars = 0;
+        break;
+      }
+      case 'usage':
+        this.totalInput += ev.usage.inputTokens;
+        this.totalOutput += ev.usage.outputTokens;
+        if (ev.usage.cacheReadTokens !== undefined) {
+          this.sawCacheField = true;
+          this.totalCacheRead += ev.usage.cacheReadTokens;
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  /** 流式期间的实时速度（tok/s 估算）；空闲时返回末次速度 */
+  speed(nowMs: number): number | null {
+    if (this.streamStart !== null && this.streamChars > 0) {
+      const secs = Math.max(0.05, (nowMs - this.streamStart) / 1000);
+      return Math.round((this.streamChars / 4 / secs) * 10) / 10;
+    }
+    return this.lastSpeed;
+  }
+
+  snapshot(nowMs: number): StatusSnapshot {
+    // 上下文估算：最近一次请求的 input（+缓存读）+ 历史输出累积的粗略和
+    const contextUsed = this.totalInput + this.totalCacheRead + this.totalOutput;
+    const cacheTotal = this.totalCacheRead + this.totalInput;
+    // provider 从未上报缓存字段（mock 等）时不显示命中率，避免把“未上报”当成 0%
+    const cacheHitRate = this.sawCacheField && cacheTotal > EPS ? this.totalCacheRead / cacheTotal : null;
+    return {
+      model: this.model,
+      contextUsed,
+      contextWindow: this.contextWindow,
+      turn: this.turn,
+      step: this.step,
+      tokensPerSecond: this.speed(nowMs),
+      cacheHitRate,
+      totalTokens: this.totalInput + this.totalOutput + this.totalCacheRead,
+    };
+  }
+}
+
+export function formatTokens(n: number): string {
+  if (n < 1000) return `${Math.round(n)}`;
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${(n / 1_000_000).toFixed(2)}M`;
+}
+
+/** 渲染状态行（纯文本，颜色由调用方叠加；按显示宽度截断到 cols） */
+export function formatStatusLine(s: StatusSnapshot, cols: number): string {
+  const parts: string[] = [];
+  parts.push(`模型 ${s.model}`);
+  const ctx =
+    s.contextWindow !== null
+      ? `${formatTokens(s.contextUsed)}/${formatTokens(s.contextWindow)}（${Math.min(100, Math.round((s.contextUsed / s.contextWindow) * 100))}%）`
+      : formatTokens(s.contextUsed);
+  parts.push(`上下文 ${ctx}`);
+  parts.push(`轮次 ${s.turn}:${s.step}`);
+  parts.push(
+    `速度 ${s.tokensPerSecond !== null ? `${s.tokensPerSecond} tok/s` : '—'}`,
+  );
+  parts.push(
+    `缓存 ${s.cacheHitRate !== null ? `${Math.round(s.cacheHitRate * 100)}%` : '—'}`,
+  );
+  parts.push(`总token ${formatTokens(s.totalTokens)}`);
+
+  let line = parts.join('  ');
+  if (displayWidth(line) > cols) {
+    // 逐步丢弃右侧字段直到放得下（至少保留模型名）
+    for (let keep = parts.length - 1; keep >= 1; keep--) {
+      line = parts.slice(0, keep).join('  ');
+      if (displayWidth(line) <= cols) break;
+    }
+  }
+  return line;
+}

@@ -72,7 +72,7 @@ export function createAnthropicProvider(opts: AnthropicOptions): Provider {
       }
 
       const blocks: ContentBlock[] = [];
-      const usage = { inputTokens: 0, outputTokens: 0 };
+      const usage: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number } = { inputTokens: 0, outputTokens: 0 };
       let stopReason: 'end_turn' | 'tool_use' | 'max_tokens' | 'refusal' | 'error' = 'end_turn';
 
       for await (const data of sseEvents(res)) {
@@ -153,6 +153,12 @@ export function createAnthropicProvider(opts: AnthropicOptions): Provider {
             }
             if (ev.usage?.output_tokens !== undefined) usage.outputTokens = ev.usage.output_tokens;
             if (ev.usage?.input_tokens !== undefined) usage.inputTokens = ev.usage.input_tokens;
+            if (ev.usage?.cache_read_input_tokens !== undefined && ev.usage.cache_read_input_tokens > 0) {
+              usage.cacheReadTokens = ev.usage.cache_read_input_tokens;
+            }
+            if (ev.usage?.cache_creation_input_tokens !== undefined && ev.usage.cache_creation_input_tokens > 0) {
+              usage.cacheWriteTokens = ev.usage.cache_creation_input_tokens;
+            }
             break;
           case 'message_stop':
             break;

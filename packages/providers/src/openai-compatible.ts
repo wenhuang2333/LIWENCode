@@ -81,7 +81,7 @@ export function createOpenAICompatibleProvider(opts: OpenAICompatibleOptions): P
       // Assemble normalized events from the wire stream.
       const blocks: ContentBlock[] = [];
       const toolCalls = new Map<number, { id: string; name: string; args: string }>();
-      const usage = { inputTokens: 0, outputTokens: 0 };
+      const usage: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number } = { inputTokens: 0, outputTokens: 0 };
       let finishReason = 'stop';
       let emittedAny = false;
 
@@ -89,7 +89,15 @@ export function createOpenAICompatibleProvider(opts: OpenAICompatibleOptions): P
         if (data === '[DONE]') break;
         let chunk: {
       choices?: { delta?: { content?: string | null; reasoning_content?: string | null; tool_calls?: { index: number; id?: string; function?: { name?: string; arguments?: string } }[] }; finish_reason?: string | null }[];
-          usage?: { prompt_tokens?: number; completion_tokens?: number };
+          usage?: {
+            prompt_tokens?: number;
+            completion_tokens?: number;
+            /** DeepSeek 上下文缓存命中（FR-121 状态栏缓存命中率数据源） */
+            prompt_cache_hit_tokens?: number;
+            prompt_cache_miss_tokens?: number;
+            /** OpenAI 兼容形态（部分网关返回） */
+            prompt_tokens_details?: { cached_tokens?: number };
+          };
         };
         try {
           chunk = JSON.parse(data);
@@ -99,6 +107,12 @@ export function createOpenAICompatibleProvider(opts: OpenAICompatibleOptions): P
         if (chunk.usage !== undefined) {
           usage.inputTokens = chunk.usage.prompt_tokens ?? usage.inputTokens;
           usage.outputTokens = chunk.usage.completion_tokens ?? usage.outputTokens;
+          const cached =
+            chunk.usage.prompt_cache_hit_tokens ??
+            chunk.usage.prompt_tokens_details?.cached_tokens;
+          if (cached !== undefined && cached > 0) {
+            usage.cacheReadTokens = cached;
+          }
         }
         const choice = chunk.choices?.[0];
         if (choice === undefined) continue;

@@ -16,6 +16,8 @@ export interface CliArgs {
   maxBudgetUsd?: number;
   cwd?: string;
   verbose: boolean;
+  /** Skip the TUI boot animation (FR-137 / TUI). */
+  noBoot: boolean;
   command?: 'exec' | 'doctor' | 'config' | 'version' | 'help';
   configSub?: 'list' | 'get' | 'path';
 }
@@ -64,6 +66,7 @@ Usage:
   /help /model /permissions /status /cost /tools /compact /clear /resume /doctor /exit
   @路径          引用文件作为上下文      !命令  执行 shell（经权限审批）
   Ctrl+C        生成中=取消本轮；空闲时按两次=退出
+  TTY 终端启动时播放粒子动画（--no-boot 跳过），随后进入常驻 TUI
   完整指令集见 docs/COMMANDS.md
 
 权限档位（三选一，互斥）：
@@ -81,6 +84,7 @@ Options:
       --max-turns <n>              轮次上限（触发出码 4）
       --max-budget-usd <amount>    费用上限
       --cwd <path>                 工作区目录
+      --no-boot                    跳过 TUI 启动动画
       --verbose                    stderr 诊断
 `;
 
@@ -94,6 +98,7 @@ export function parseArgs(argv: string[]): CliArgs {
     allowedTools: [],
     disallowedTools: [],
     verbose: false,
+    noBoot: false,
   };
   let i = 0;
   const next = (flag: string): string => {
@@ -185,6 +190,9 @@ export function parseArgs(argv: string[]): CliArgs {
         break;
       case '--verbose':
         args.verbose = true;
+        break;
+      case '--no-boot':
+        args.noBoot = true;
         break;
       default:
         if (a.startsWith('-')) {

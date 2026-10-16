@@ -12,10 +12,10 @@
 | 验证项 | 结果 | 数量 |
 | --- | --- | --- |
 | TypeScript 严格检查（`strict` + `exactOptionalPropertyTypes` + `noUncheckedIndexedAccess`） | ✅ 0 错误 | 5 包 |
-| 单元/合约测试（vitest） | ✅ 全部通过 | **132 通过 / 0 失败**（core 59、providers 18、tools 18、testing 9、cli 28） |
+| 单元/合约测试（vitest） | ✅ 全部通过 | **168 通过 / 0 失败**（core 59、providers 18、tools 18、testing 9、cli 64） |
 | 评测集（G1 种子，确定性 MockProvider 驱动真实内核） | ✅ 全部通过 | **10/10** |
 | 错误码注册表治理检查 | ✅ 通过 | 78 码、zh-CN 齐全、可重试 14、fatal 3、DEC-007 空缺保持 |
-| CLI 冒烟（真实进程） | ✅ 通过 | 交互式 + 非交互共 13 项 |
+| CLI 冒烟（真实进程） | ✅ 通过 | 交互式 + 非交互共 13 项；TUI pty 冒烟 2 项 |
 
 ## 2. 各包测试明细
 
@@ -77,7 +77,7 @@ MockProvider 请求记录与脚本耗尽语义（LW-PRV-007）；MemoryRuntime �
 
 `--version` ✓；`doctor`（12 项检查，无密钥环境正常，不泄露值）✓；`-p` mock text 输出 exit=0 ✓；`--output-format stream-json` 每行含 schemaVersion/sessionId/ts ✓；`--output-format json` 输出版本化结果对象 ✓；非法参数 exit=2 ✓；**真实工作区端到端**（read 工具读真实文件 → mock 汇报 → exit=0）✓。
 
-## 4. 测试驱动的修复与优化（12 项）
+## 4. 测试驱动的修复与优化（17 项）
 
 | # | 发现 | 修复 |
 | --- | --- | --- |
@@ -93,20 +93,60 @@ MockProvider 请求记录与脚本耗尽语义（LW-PRV-007）；MemoryRuntime �
 | 10 | 流式渲染缺失：循环只发 message.complete，UI 无法增量显示 | 循环转发 provider block_delta 为 `text.delta` 事件（ADR-02），REPL 增量渲染 |
 | 11 | **三档冒烟发现**：macOS 上 `--cwd` 指向 `/var/folders/...` 临时目录时，realpath 返回 `/private/var/...`，与未规范化的 workspaceRoot 不匹配 → 误判"工作区外"（LW-PERM-003） | 权限引擎对 workspaceRoots 做一次性 realpath 规范化后缓存再比较 |
 | 12 | 档位断言与固定横幅文案冲突（管道模式提示恒含"无人值守"字样） | 断言改用 `LW-CLI-002` 作为实际拒绝标记（测试侧修正，同时印证横幅提示与真实拒绝可区分） |
+| 13 | **TUI 翼展断言发现**：蝴蝶翅膀 `\|cos(4πf)\|` 在扇动窗口内完成 4 个开合周期（扇了四下，不是两下） | 改为 `\|cos(2πf)\|`，恰好两个开合周期=扇两下；身体起伏同步改两周期 |
+| 14 | **hold 静止断言发现**：艺术字相位后 hold 阶段起点仍取蝴蝶位置，成型后会重新变形一次 | hold 起点取 art 目标（静止），仅保留同层色彩脉动 |
+| 15 | 变形缓动按整个相位时长推进：蝴蝶阶段开始 1.4s 后粒子仍在半途，扇动测试测到的是变形进度而非翅膀开合 | 引入变形窗口（skyline 0.8s / butterfly 0.5s），窗口内完成位移、窗口外粒子锁定目标 |
+| 16 | **状态栏测试发现**：provider 未上报缓存字段时命中率被当作 0% 显示 | 引入 `sawCacheField` 标记：从未上报 → 显示 —，上报过（含 0）→ 显示百分比 |
+| 17 | **pty 冒烟发现**：pty 下 `output.columns=0`，底边框 `'─'.repeat(cols-2)` 抛 "Invalid count value: -2" 直接 fatal | drawChrome 列数下限保护 `max(24, columns ?? 80)` |
 
-## 5. 已知限制（v0.1 范围外，按 WBS 顺延）
+## 5. TUI 专项（v0.1 追加，36 项单测 + pty 冒烟）
+
+### 5.1 启动粒子动画 `tui/boot.ts`（11 项）
+
+- **相位时间轴**：skyline(2.0s)→butterfly(2.4s)→art(1.0s)→hold(1.0s) 首尾相接，总时长 6.4s，`phaseAt` 边界切换正确。
+- **确定性**：同种子同尺寸 `pixelSnapshot` 逐像素相等（可复现测试）。
+- **城市天际线**：聚合完成后建筑轮廓冷色（39/45/81）与窗灯暖色（220/226）同时出现，像素量 >150。
+- **蝴蝶扇动两下**（数值断言）：扇动窗口 [2.5s, 3.9s] 内翼展呈 开→收→开→收→开 五点采样，收翅翼展 < 开翅 60%、相邻开收比 >2；收势阶段保持全开。*此断言曾抓出真实 bug：初版 `|cos(4πf)|` 实际扇动四下，修正为 `|cos(2πf)|`。*
+- **三层色艺术字**：hold 帧蓝（33/39）、绿（46/48）、紫（135/141）三色同屏；蓝色平均行号 < 紫色（蓝上紫下）。
+- **hold 静止**：不同时刻两帧像素几何完全一致（仅色彩脉动）——曾抓出 hold 起点误取蝴蝶位置的相位衔接 bug。
+- **门控**：终端 <40 列或 <12 行不播放；`--no-boot` 解析。
+
+### 5.2 行编辑器 `tui/editor.ts`（8 项）
+
+插入/提交/Backspace/Delete/左右/Home/End；CJK 按码点删除（不切半个字）且 `cursorCol` 按 2 列计；↑↓ 历史浏览保留草稿、重复提交不入栈；Ctrl+U/K 行编辑；Ctrl+C 中断、Ctrl+D 空行 EOF / 非空充当 Delete；一次 feed 多键（粘贴）。
+
+### 5.3 状态栏 `tui/status.ts`（8 项）
+
+- 轮次（turn.start）/步数（tool.start）计数；usage 累计与缓存命中率 = cacheRead/(cacheRead+input)。
+- **"未上报缓存"与"缓存命中 0"区分**：provider 从未返回缓存字段时命中率显示 —（曾把未上报当 0%，已修）。
+- **速度语义**：流式期间按实时字符速率估算 tok/s；message.complete 后固定为末次速度（用户需求"工作结束了就是最后一次输出的速度"）。
+- formatTokens 分级缩写；状态行含全部六字段；窄终端自动从右丢弃字段。
+
+### 5.4 宽度与字形 `tui/width.ts` + `tui/font5x7.ts`（9 项）
+
+CJK/全角/emoji 列宽；ANSI 转义零列；truncateToWidth 不切半个宽字符；padToWidth 按显示宽度补齐。5x7 点阵：LIWEN CODE 坐标在网格界内、gridWidth=字数×6−1、未知字符按空格、两次渲染逐点一致。
+
+### 5.5 pty 冒烟（真实终端仿真，2 项）
+
+macOS `script` 分配 pty 驱动真实 TUI：逐字输入实时回显且光标 ESC 序列按 CJK 宽度前进（4C→8C→12C）；提交回显、mock 流式回复渲染于输入框上方、回合结束 chrome 重绘、/exit 退出；mock 未配脚本时 LW-PRV 错误正常打印于 chrome 上方。*曾抓出 pty 下 `output.columns=0` 导致 `'─'.repeat(-2)` 崩溃，已加列数下限保护。*
+
+### 5.6 实现要点（无第三方依赖）
+
+半块渲染（▀ 上/▄ 下，垂直分辨率 ×2）；粒子系统 tick(tMs) 纯时间驱动（确定性可测）；ESC7/ESC8 + 清除下方实现底部锚定 chrome、流式输出零整屏刷新；raw 模式输入统一走 LineEditor 状态机；权限审批/配置向导复用同一输入框（问题显示于框标题）。
+
+## 6. 已知限制（v0.1 范围外，按 WBS 顺延）
 
 - 真实模型 Provider 仅经本地 SSE mock 验证合约（G2 的"真实密钥联调"待 M1 收尾/用户提供密钥后补充 DeepSeek 实测）。
 - TUI、会话恢复 CLI、自动压缩、MCP、决策层、三角色编排未实现（M2~M4 范围）。
 - 评测集为 10 项种子，G1 要求的 30 项任务集在 M1 后续扩充。
 - CI 工作流已就绪（.github/workflows/ci.yml，ubuntu/macos × Node 22），推送后首跑验证。
 
-## 6. 复现命令
+## 7. 复现命令
 
 ```bash
 corepack pnpm install
 corepack pnpm typecheck      # 0 errors
-corepack pnpm test           # 132 passed
+corepack pnpm test           # 168 passed
 corepack pnpm lint:registry  # 78 codes OK
 corepack pnpm test:evals     # 10/10
 
