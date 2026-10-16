@@ -12,7 +12,7 @@
 | 验证项 | 结果 | 数量 |
 | --- | --- | --- |
 | TypeScript 严格检查（`strict` + `exactOptionalPropertyTypes` + `noUncheckedIndexedAccess`） | ✅ 0 错误 | 5 包 |
-| 单元/合约测试（vitest） | ✅ 全部通过 | **168 通过 / 0 失败**（core 59、providers 18、tools 18、testing 9、cli 64） |
+| 单元/合约测试（vitest） | ✅ 全部通过 | **182 通过 / 0 失败**（core 59、providers 18、tools 18、testing 9、cli 78） |
 | 评测集（G1 种子，确定性 MockProvider 驱动真实内核） | ✅ 全部通过 | **10/10** |
 | 错误码注册表治理检查 | ✅ 通过 | 78 码、zh-CN 齐全、可重试 14、fatal 3、DEC-007 空缺保持 |
 | CLI 冒烟（真实进程） | ✅ 通过 | 交互式 + 非交互共 13 项；TUI pty 冒烟 2 项 |
@@ -77,7 +77,7 @@ MockProvider 请求记录与脚本耗尽语义（LW-PRV-007）；MemoryRuntime �
 
 `--version` ✓；`doctor`（12 项检查，无密钥环境正常，不泄露值）✓；`-p` mock text 输出 exit=0 ✓；`--output-format stream-json` 每行含 schemaVersion/sessionId/ts ✓；`--output-format json` 输出版本化结果对象 ✓；非法参数 exit=2 ✓；**真实工作区端到端**（read 工具读真实文件 → mock 汇报 → exit=0）✓。
 
-## 4. 测试驱动的修复与优化（17 项）
+## 4. 测试驱动的修复与优化（20 项）
 
 | # | 发现 | 修复 |
 | --- | --- | --- |
@@ -98,6 +98,9 @@ MockProvider 请求记录与脚本耗尽语义（LW-PRV-007）；MemoryRuntime �
 | 15 | 变形缓动按整个相位时长推进：蝴蝶阶段开始 1.4s 后粒子仍在半途，扇动测试测到的是变形进度而非翅膀开合 | 引入变形窗口（skyline 0.8s / butterfly 0.5s），窗口内完成位移、窗口外粒子锁定目标 |
 | 16 | **状态栏测试发现**：provider 未上报缓存字段时命中率被当作 0% 显示 | 引入 `sawCacheField` 标记：从未上报 → 显示 —，上报过（含 0）→ 显示百分比 |
 | 17 | **pty 冒烟发现**：pty 下 `output.columns=0`，底边框 `'─'.repeat(cols-2)` 抛 "Invalid count value: -2" 直接 fatal | drawChrome 列数下限保护 `max(24, columns ?? 80)` |
+| 18 | **欢迎面板翼展断言发现**：蝴蝶触角横向位置做了 `/wing` 补偿，收翅时触角反向张开成 11px，翼展断言失败 | 触角位置固定不随翅膀缩放 |
+| 19 | **翼展断言再发现**：收翅点取在半周期（\|cos(π)\|=1 仍全开），与启动动画同源的 \|cos\| 周期陷阱 | 收翅断言点改为 1/4 周期 |
+| 20 | **等宽断言发现**：欢迎面板内容行分隔符实际占 7 列而公式按 8 列算，行宽 87≠88 | `leftW+rightW = panelW−7` 修正 |
 
 ## 5. TUI 专项（v0.1 追加，36 项单测 + pty 冒烟）
 
@@ -134,19 +137,40 @@ macOS `script` 分配 pty 驱动真实 TUI：逐字输入实时回显且光标 E
 
 半块渲染（▀ 上/▄ 下，垂直分辨率 ×2）；粒子系统 tick(tMs) 纯时间驱动（确定性可测）；ESC7/ESC8 + 清除下方实现底部锚定 chrome、流式输出零整屏刷新；raw 模式输入统一走 LineEditor 状态机；权限审批/配置向导复用同一输入框（问题显示于框标题）。
 
-## 6. 已知限制（v0.1 范围外，按 WBS 顺延）
+## 6. 欢迎面板与指令联想（v0.1 追加，14 项单测 + pty 冒烟）
+
+### 6.1 欢迎面板 `tui/welcome.ts`（6 项）
+
+- 迷你像素字体（"LIWENCode" 专用变宽 5 行）点阵边界与紧凑宽度 32 列。
+- 黑白阴影艺术字：主字亮白 250 + 投影深灰 238，**仅两色无彩色**；纵向 ×2 适配半块正方形像素。
+- 多彩蝴蝶：彩虹六色（196/208/226/46/44/21）按曲线角度分区，着色 ≥3 色；1/4 周期处翼展 < 全开 60%（持续扇翅，2.4s 周期）；`t` 与 `t+周期` 逐像素一致（周期性）。
+- renderPanel：行数=panelH、首尾行圆角边框、去 ANSI 后每行等宽、含 "Welcome to LIWENCode" 与模型/提示、右侧文本无 CJK（全英文）、两时刻帧不同（动画驱动）。
+- 终端 <64 列或 <20 行返回空（调用方回退旧横幅）。
+
+### 6.2 指令联想 `tui/palette.ts` + 编辑器 nav（8 项）
+
+- 提示表 15 条全部 `/` 开头、名字唯一、英文描述无 CJK。
+- 前缀过滤：非 `/` 开头 / 空行 / 已带参数（含空格）不触发；`/` 全量截断到 6；`/m` → /model+/mcp；`/c` → /cost+/compact+/clear；大小写不敏感；exactIndex 完整命令名命中。
+- 编辑器：navCapture 关闭时 ↑↓ 浏览历史、开启时产生 nav 事件不改内容；独立 Esc 与 Tab 事件（Tab 不再自动插空格，由 TUI 按联想状态决定）；setLine 整行替换并复位历史浏览。
+
+### 6.3 pty 冒烟（sized pty，`stty cols 100 rows 40`）
+
+- 欢迎面板真终端渲染：21 帧动画（150ms 刷新）、圆角标题边框、英文欢迎与提示齐全。
+- 联想全链路：`/` → 输入 `m` 过滤出 /model+/mcp → `↓` 选择 /mcp → `Enter` 补全 `/mcp ` → 输入 `list` → `Enter` 执行（占位提示输出）→ `Esc` 关闭 → `/exit` 退出。
+
+## 7. 已知限制（v0.1 范围外，按 WBS 顺延）
 
 - 真实模型 Provider 仅经本地 SSE mock 验证合约（G2 的"真实密钥联调"待 M1 收尾/用户提供密钥后补充 DeepSeek 实测）。
 - TUI、会话恢复 CLI、自动压缩、MCP、决策层、三角色编排未实现（M2~M4 范围）。
 - 评测集为 10 项种子，G1 要求的 30 项任务集在 M1 后续扩充。
 - CI 工作流已就绪（.github/workflows/ci.yml，ubuntu/macos × Node 22），推送后首跑验证。
 
-## 7. 复现命令
+## 8. 复现命令
 
 ```bash
 corepack pnpm install
 corepack pnpm typecheck      # 0 errors
-corepack pnpm test           # 168 passed
+corepack pnpm test           # 182 passed
 corepack pnpm lint:registry  # 78 codes OK
 corepack pnpm test:evals     # 10/10
 

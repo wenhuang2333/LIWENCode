@@ -58,6 +58,8 @@ import { BootAnimation, bootSupported } from './boot.js';
 import { LineEditor } from './editor.js';
 import { StatusTracker, formatStatusLine } from './status.js';
 import { displayWidth, truncateToWidth } from './width.js';
+import { renderPanel, welcomeSupported } from './welcome.js';
+import { suggestCommands, exactIndex, type CommandHint } from './palette.js';
 
 const ANSI = {
   dim: (s: string) => `\x1b[2m${s}\x1b[22m`,
@@ -159,6 +161,11 @@ export async function runTui(opts: TuiOptions): Promise<number> {
   let activeAbort: AbortController | undefined;
   let agent = createCurrentAgent();
   let statusTimer: NodeJS.Timeout | undefined;
+  // 欢迎面板：进入工作区时显示，首次真实输出（printAbove）后永久收起
+  let welcomeActive = false;
+  // 指令联想：输入 "/" 且未出现空格时激活
+  let paletteHints: CommandHint[] = [];
+  let paletteIdx = 0;
 
   function safeContextWindow(s: ProviderSpec): number | null {
     try {
@@ -197,8 +204,10 @@ export async function runTui(opts: TuiOptions): Promise<number> {
   // ── 输出（chrome 感知） ──────────────────────────────────────────────
 
   /** 在 chrome 上方打印文本（文本以换行结尾时正好贴住 chrome 顶部）。
-   * raw 模式下终端不做 NL→CRNL 转换，统一在此归一化。 */
+   * raw 模式下终端不做 NL→CRNL 转换，统一在此归一化。
+   * 首次真实输出即收起欢迎面板（工作区开始承接内容）。 */
   function printAbove(text: string): void {
+    welcomeActive = false;
     const nl = text.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
     const parts: string[] = [];
     if (chromeDrawn) parts.push(RESTORE, CLEAR_BELOW);
@@ -228,7 +237,63 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     }
   }
 
-  /** 画输入框（3 行）+ 状态行（1 行），并把光标定位到编辑位置 */
+  /** 指令联想弹层（输入框上方） */
+  function renderPalette(cols: number): string[] {
+    const w = Math.min(cols, 72);
+    const lines: string[] = [];
+    const title = ' commands ';
+    const fill = w - 2 - title.length;
+    lines.push(`╭${'─'.repeat(Math.floor(fill / 2))}${title}${'─'.repeat(fill - Math.floor(fill / 2))}╮`);
+    for (let i = 0; i < paletteHints.length; i++) {
+      const h = paletteHints[i]!;
+      const selected = i === paletteIdx;
+      const marker = selected ? '❯ ' : '  ';
+      const name = h.name.padEnd(11);
+      const args = h.args.padEnd(18);
+      const rowPlain = ` ${marker}${name} ${args}`;
+      const pad = w - 2 - plainLenOf(rowPlain);
+      const row = selected
+        ? `\x1b[7m ${marker}${ANSI.green(h.name.padEnd(11))} ${args}${' '.repeat(Math.max(0, pad))}\x1b[27m`
+        : ` ${marker}${ANSI.green(h.name.padEnd(11))} ${ANSI.dim(args)}${' '.repeat(Math.max(0, pad))}`;
+      lines.push(`│${row}│`);
+    }
+    // 选中项说明 + 键位提示
+    const sel = paletteHints[paletteIdx]!;
+    const [desc] = truncateToWidth(sel.desc, w - 6);
+    lines.push(`├${'─'.repeat(w - 2)}┤`);
+    lines.push(`│ ${ANSI.bold(desc)}${' '.repeat(Math.max(0, w - 4 - displayWidth(desc)))} │`);
+    const keys = '↑↓ select · Tab/Enter complete · Esc close';
+    lines.push(`│ ${ANSI.dim(keys)}${' '.repeat(Math.max(0, w - 4 - keys.length))} │`);
+    lines.push(`╰${'─'.repeat(w - 2)}╯`);
+    return lines;
+  }
+
+  function plainLenOf(s: string): number {
+    return s.replace(/\x1b\[[0-9;]*m/g, '').length;
+  }
+
+  /** 根据编辑器内容刷新联想候选（仅主输入模式） */
+  function updatePalette(): void {
+    if (mode.kind !== 'input') {
+      paletteHints = [];
+      editor.setNavCapture(false);
+      return;
+    }
+    paletteHints = suggestCommands(editor.text());
+    const exact = exactIndex(paletteHints, editor.text());
+    paletteIdx = paletteHints.length > 0 ? (exact >= 0 ? exact : 0) : 0;
+    editor.setNavCapture(paletteHints.length > 0);
+  }
+
+  /** 用选中候选补全输入行（命令名 + 空格，等待参数/回车执行） */
+  function completeSelected(): void {
+    if (paletteHints.length === 0) return;
+    editor.setLine(`${paletteHints[paletteIdx]!.name} `);
+    paletteHints = [];
+    editor.setNavCapture(false);
+  }
+
+  /** 画欢迎面板（可选）+ 联想弹层（可选）+ 输入框（3 行）+ 状态行，并定位光标 */
   function drawChrome(): void {
     // pty/极窄终端下列数可能为 0，做下限保护（repeat 负数会抛错）
     const cols = Math.max(24, output.columns ?? 80);
@@ -236,6 +301,26 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     seq.push(chromeDrawn ? RESTORE : SAVE);
     if (chromeDrawn) seq.push(CLEAR_BELOW);
     chromeDrawn = true;
+    let linesAboveBox = 0;
+
+    // 欢迎面板（左：多彩扇翅蝴蝶 + 黑白阴影艺术字；右：英文欢迎与提示）
+    if (welcomeActive) {
+      const rowsAvail = (output.rows ?? 24) - 6; // 输入框 3 + 状态 1 + 余量
+      const panelH = Math.min(22, Math.max(12, rowsAvail));
+      const panel = renderPanel(cols, panelH, Date.now(), {
+        version: 'v0.1.0',
+        model: `${spec.provider}:${spec.model}`,
+        tier: tierShortOf(agent.engine.mode),
+      });
+      for (const line of panel) seq.push(`\r${line}\r\n`);
+      linesAboveBox += panel.length;
+    }
+
+    // 指令联想弹层
+    if (paletteHints.length > 0) {
+      for (const line of renderPalette(cols)) seq.push(`\r${line}\r\n`);
+      linesAboveBox += paletteHints.length + 5; // 顶框+列表+分隔+说明+键位+底框
+    }
 
     // 边框宽度按纯文本列宽计算（boxTitle 含 ANSI，先量后截）
     const titlePlain = stripAnsi(boxTitle());
@@ -260,9 +345,9 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     const status = formatStatusLine(snap, cols - 2);
     seq.push(`\r ${ANSI.dim(status)}\r\n`);
 
-    // 光标定位：回到 chrome 起点 → 下移 2 行 → 右移到输入光标列（反显块）
+    // 光标定位：回到 chrome 起点 → 跳过弹层/面板与框顶 → 内容行 → 右移到光标列
     seq.push(RESTORE);
-    seq.push('\x1b[2B'); // 下移到内容行
+    seq.push(`\x1b[${linesAboveBox + 2}B`); // 下移到内容行（框顶 1 + 内容 1）
     const cursorVisCol = Math.min(cursorCol - scroll, inner - 2);
     seq.push(`\x1b[${2 + 2 + cursorVisCol}C`); // '│ ' + '❯ ' 之后
     output.write(seq.join(''));
@@ -337,9 +422,29 @@ export async function runTui(opts: TuiOptions): Promise<number> {
           output.write(RESTORE + CLEAR_BELOW + '\r\n' + ANSI.dim('再见。') + '\r\n');
           cleanup(0);
         }
-      } else if (mode.kind === 'input' && !busy) {
+      } else if (ev.type === 'nav') {
+        // 联想激活时的 ↑↓ 选择（循环滚动）
+        if (paletteHints.length > 0) {
+          const delta = ev.dir === 'up' ? -1 : 1;
+          paletteIdx = (paletteIdx + delta + paletteHints.length) % paletteHints.length;
+          redraw();
+        }
+      } else if (ev.type === 'escape') {
+        if (paletteHints.length > 0) {
+          paletteHints = [];
+          editor.setNavCapture(false);
+          redraw();
+        }
+      } else if (ev.type === 'tab') {
+        if (paletteHints.length > 0) {
+          completeSelected();
+        } else {
+          editor.insert('  ');
+        }
         redraw();
       } else {
+        // update：内容/光标变化 → 重算联想并重绘
+        updatePalette();
         redraw();
       }
     }
@@ -361,6 +466,16 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       editor.clear();
       redraw();
       return;
+    }
+    // 指令联想激活时：Enter = 补全选中项（输入恰为完整命令名则直接执行）
+    if (paletteHints.length > 0) {
+      if (exactIndex(paletteHints, text) < 0) {
+        completeSelected();
+        redraw();
+        return;
+      }
+      paletteHints = [];
+      editor.setNavCapture(false);
     }
     // 主输入
     if (busy) {
@@ -803,14 +918,19 @@ export async function runTui(opts: TuiOptions): Promise<number> {
   }
   output.on('resize', resizeHandler);
 
-  // 开场
-  printAbove(ANSI.bold('LIWENCode v0.1 交互模式') + '\n');
-  printAbove(ANSI.dim(`  权限档位: ${tierLongOf(tier.mode)}`) + '\n');
-  printAbove(ANSI.dim('  /help 查看命令 · @文件 引用上下文 · !命令 执行 shell · Ctrl+C 取消/退出') + '\n');
+  // 开场：终端足够大 → 欢迎面板（多彩蝴蝶 + 艺术字 + 英文提示）；否则旧横幅兜底
+  if (welcomeSupported(output.columns ?? 80, output.rows ?? 24)) {
+    welcomeActive = true;
+  } else {
+    printAbove(ANSI.bold('LIWENCode v0.1 交互模式') + '\n');
+    printAbove(ANSI.dim(`  权限档位: ${tierLongOf(tier.mode)}`) + '\n');
+    printAbove(ANSI.dim('  /help 查看命令 · @文件 引用上下文 · !命令 执行 shell · Ctrl+C 取消/退出') + '\n');
+  }
   redraw();
+  // 欢迎面板蝴蝶扇翅动画 + 状态栏实时速度共用此定时器
   statusTimer = setInterval(() => {
     if (chromeDrawn) redraw();
-  }, 500);
+  }, 150);
 
   if (opts.initialPrompt !== undefined && opts.initialPrompt.trim().length > 0) {
     printAbove(`${ANSI.cyan('❯')} ${opts.initialPrompt}\n`);
