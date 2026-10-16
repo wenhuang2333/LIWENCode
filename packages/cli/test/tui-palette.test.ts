@@ -22,10 +22,11 @@ describe('tui/palette 指令联想', () => {
     expect(all[0]!.name).toBe('/help');
   });
 
-  it('前缀过滤：/m → /model+/mcp；大小写不敏感', () => {
-    expect(suggestCommands('/m').map((h) => h.name)).toEqual(['/model', '/mcp']);
+  it('前缀过滤：/m → /model+/manage+/mcp；大小写不敏感；新命令在表中', () => {
+    expect(suggestCommands('/m').map((h) => h.name)).toEqual(['/model', '/manage', '/mcp']);
     expect(suggestCommands('/MO').map((h) => h.name)).toEqual(['/model']);
     expect(suggestCommands('/c').map((h) => h.name)).toEqual(['/cost', '/compact', '/clear']);
+    expect(suggestCommands('/s').map((h) => h.name)).toEqual(['/status', '/setup']);
   });
 
   it('exactIndex：完整命令名命中', () => {

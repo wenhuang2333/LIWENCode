@@ -68,7 +68,7 @@ TTY 下 `liwen` 进入自研纯 ANSI TUI（零第三方依赖，不依赖 Ink/Re
 
 动画结束后首先展示一个圆角矩形欢迎面板（终端 ≥64 列 ×20 行时显示，首次真实输出后自动收起，**内部无中缝分隔线**）：
 
-- **上半区**：左侧一只**持续扇翅的多彩蝴蝶**（彩虹按曲线角度分区着色，2.4s 一个扇翅周期，150ms 刷新）；右侧英文欢迎语 `Welcome to LIWENCode`、版本、当前模型与权限档位、常用指令速览（`/help` `/model` `/status` `/exit`）、输入法提示（`@file` / `!cmd` / `Ctrl+C`）与 `Type / for command palette` 引导
+- **上半区**：左侧一只**持续扇翅的多彩蝴蝶**（彩虹按曲线角度分区着色，2.4s 一个扇翅周期，150ms 刷新；**用户敲任意键后立即冻结为静态姿态**——动画停止、面板保持静态直至首次输出，防频繁重绘）；右侧英文欢迎语 `Welcome to LIWENCode`、版本、当前模型与权限档位、常用指令速览（`/help` `/model` `/status` `/exit`）、输入法提示（`@file` / `!cmd` / `Ctrl+C`）与 `Type / for command palette` 引导
 - **底部**：**黑白阴影画风的 `LIWENCode` 艺术字横向铺满整个面板宽度**（纯白主字 + 右下深灰投影，按宽度自动缩放与均匀字距）
 
 ### 指令联想（Command Palette）
@@ -148,10 +148,37 @@ TTY 下 `liwen` 进入自研纯 ANSI TUI（零第三方依赖，不依赖 Ink/Re
 | `/cost` | 累计请求次数、输入/输出 token、费用（provider 提供定价时） |
 | `/tools` | 已注册工具及风险级别（read/write/exec）、是否只读、并发安全 |
 | `/doctor` | 与 `liwen doctor` 相同的 12 项诊断 |
+| `/setup` | **模型配置向导**（TUI）：进度线引导逐步填写模型名称→请求地址→API Key→API 协议→认证字段→档案名，最后保存（见下节） |
+| `/manage` | **管理自定义模型档案**（TUI）：列出已存档案，选择后可查看详情、编辑（重跑向导、空输入沿用现值）或删除 |
 | `/clear` | 清空对话历史，开启新会话 |
 | `/compact` | 手动压缩：清理旧工具结果（保留最近 6 轮），显示前后 token 对比 |
 | `/resume [id]` | 列出最近 5 个会话；`/resume <id>` 恢复指定会话（下一条消息接续其历史） |
 | `/exit` `/quit` | 退出 |
+
+
+### 自定义模型：`/setup` 向导 与 `/manage` 管理（TUI）
+
+内置 Provider（mock / deepseek / openai-compatible / anthropic）之外的任意端点，用 **`/setup`** 以 Vite create-app 式向导接入：左侧竖向进度线，每个流程点一个彩色圆点、连接线与下一流程点同色（点与线颜色互不相同），当前步高亮、已完成步展示答案、未到步置灰。
+
+**六步流程**（Enter 确认 / 选择步 ↑↓ 选、Enter 确认 / `Esc` 取消）：
+
+| # | 字段 | 说明 |
+| --- | --- | --- |
+| 1 | model name | 模型名称，如 `deepseek-chat`、`claude-sonnet-4` |
+| 2 | request url | 请求地址（须 http/https 开头） |
+| 3 | api key | 密钥（**输入时掩码显示**；保存到 `~/.liwencode/env`，权限 0600，绝不入 config.json/日志/会话） |
+| 4 | api protocol | **四种协议**：Anthropic Messages / OpenAI ChatCompletion / OpenAI Responses API（适配器规划 M2）/ Gemini Native GenerateContent（适配器规划 M2） |
+| 5 | auth field | 认证字段：`Authorization: Bearer` / `x-api-key` / `x-goog-api-key` / `?key=` 查询参数（选项随协议自动收窄，选错协议时自动回退默认） |
+| 6 | profile name | 档案名（请求名称），之后以 `@名称` 引用；保存前校验命名与重名 |
+
+保存后询问 `设为当前模型? [Y/n]`：确认即切换（等价 `/model use @名称`，历史保留）；否则可用 `/model use @名称` 随时启用。协议为 Responses/Gemini 的档案可正常保存，但实际调用会报 `LW-PRV-010`（适配器规划于 M2），向导保存时会明确提示。
+
+**`/manage`**：列出全部档案（协议、模型、密钥状态），输入档案名后显示详情（模型/地址/协议/认证/更新时间），可选：
+
+- `e` 编辑：重跑向导并预填现值；文本步**直接回车 = 沿用当前值**，API Key 留空 = 不变更
+- `d` 删除：二次确认后移除档案（当前默认模型指向它时自动回退 mock；env 文件中的密钥字段保留，可手动清理）
+
+档案存储于 `~/.liwencode/config.json` 的 `models` 字段（非机密）；引用的密钥以 `LIWEN_KEY_<档案名大写>` 存于 `~/.liwencode/env`。管道/REPL 下 `/setup`、`/manage` 提示需 TUI（手动编辑 config.json 的 `models` 字段亦可）。
 
 ### 模型管理：`/model`
 

@@ -1,14 +1,15 @@
-import { nodeRuntime, type Provider } from '@liwencode/core';
+import { LiwenError, nodeRuntime, type Provider } from '@liwencode/core';
 import { createAnthropicProvider, createOpenAICompatibleProvider } from '@liwencode/providers';
 import { MockProvider } from '@liwencode/testing';
 import type { Message } from '@liwencode/core';
 import type { CliArgs } from './args.js';
-import { catalogEntry, resolveDefaultModel } from './model-config.js';
+import { catalogEntry, getProfile, resolveDefaultModel } from './model-config.js';
 
 /**
  * Provider resolution for the CLI. `mock:` runs fully offline; real providers
  * need their key in process env (secrets from ~/.liwencode/env are merged at
  * startup — see model-config.loadSecretsIntoEnv).
+ * `@<profile>` 引用 /setup 创建的自定义模型档案。
  */
 
 export interface ProviderSpec {
@@ -35,10 +36,13 @@ function requireKey(envName: string): string {
 
 /** Build a Provider from a spec, honoring catalog base URLs and env overrides. */
 export function buildProvider(spec: ProviderSpec): Provider & { model: string } {
+  if (spec.provider.startsWith('@')) {
+    return buildProfileProvider(spec.provider.slice(1), spec.model);
+  }
   const entry = catalogEntry(spec.provider);
   if (entry === undefined) {
     throw new Error(
-      `unknown provider '${spec.provider}' (LW-CLI-001). Supported: ${catalogEntryList()}. Run /model config for guided setup.`,
+      `unknown provider '${spec.provider}' (LW-CLI-001). Supported: ${catalogEntryList()}. Run /setup for guided setup or /model config.`,
     );
   }
   const runtime = nodeRuntime();
@@ -63,6 +67,36 @@ export function buildProvider(spec: ProviderSpec): Provider & { model: string } 
       const baseUrl = process.env.ANTHROPIC_BASE_URL ?? entry.baseUrl;
       return Object.assign(createAnthropicProvider({ runtime, apiKey, baseUrl }), { model: spec.model });
     }
+  }
+}
+
+/** 自定义档案 → Provider。协议适配器未实现的抛 LW-PRV-010（规划 M2）。 */
+function buildProfileProvider(profileName: string, modelOverride: string): Provider & { model: string } {
+  const profile = getProfile(profileName);
+  if (profile === undefined) {
+    throw new Error(`model profile '@${profileName}' not found (LW-CLI-001). Run /setup to create it or /manage to list profiles.`);
+  }
+  const model = modelOverride !== '' && modelOverride !== 'default' ? modelOverride : profile.model;
+  const runtime = nodeRuntime();
+  switch (profile.protocol) {
+    case 'openai-chat': {
+      const apiKey = requireKey(profile.apiKeyEnv);
+      const authStyle = profile.authField === 'query-key' ? 'query-key' : profile.authField === 'x-api-key' ? 'x-api-key' : 'bearer';
+      return Object.assign(
+        createOpenAICompatibleProvider({ runtime, baseUrl: profile.baseUrl, apiKey, id: `@${profileName}`, authStyle }),
+        { model },
+      );
+    }
+    case 'anthropic': {
+      const apiKey = requireKey(profile.apiKeyEnv);
+      return Object.assign(createAnthropicProvider({ runtime, apiKey, baseUrl: profile.baseUrl }), { model });
+    }
+    case 'openai-responses':
+    case 'gemini':
+      throw new LiwenError({
+        code: 'LW-PRV-010',
+        message: `profile '@${profileName}' uses protocol '${profile.protocol}' whose adapter is not implemented yet (planned M2). Re-run /setup with Anthropic or OpenAI ChatCompletion.`,
+      });
   }
 }
 

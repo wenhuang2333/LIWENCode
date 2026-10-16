@@ -105,6 +105,12 @@ describe('tui/welcome 欢迎面板', () => {
     expect(a).not.toBe(b);
   });
 
+  it('frozen：任意时刻渲染完全一致（首键冻结，蝴蝶静态）', () => {
+    const a = renderPanel(COLS, PANEL_H, 0, INFO, true);
+    const b = renderPanel(COLS, PANEL_H, Math.floor(FLAP_CYCLE_MS * 0.37), INFO, true);
+    expect(a.join('')).toBe(b.join(''));
+  });
+
   it('终端过小返回空（调用方回退旧横幅）', () => {
     expect(welcomeSupported(63, 30)).toBe(false);
     expect(welcomeSupported(64, 19)).toBe(false);

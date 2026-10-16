@@ -15,6 +15,7 @@ export const MESSAGES_ZH_CN: Readonly<Record<string, string>> = {
   'LW-PRV-007': '模型流意外中断，将重试。',
   'LW-PRV-008': '模型响应格式非法，将重试一次。',
   'LW-PRV-009': '模型服务端错误或过载（5xx），将重试。',
+  'LW-PRV-010': '该模型配置使用的协议适配器尚未实现（OpenAI Responses / Gemini，规划于 M2），请改用 Anthropic 或 OpenAI ChatCompletion 协议。',
   'LW-LOOP-001': '已达到最大轮次上限。',
   'LW-LOOP-002': '预算（token 或费用）已耗尽。',
   'LW-LOOP-003': '用户中断了运行。',

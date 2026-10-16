@@ -60,6 +60,26 @@ import { StatusTracker, formatStatusLine } from './status.js';
 import { displayWidth, truncateToWidth } from './width.js';
 import { renderPanel, welcomeSupported } from './welcome.js';
 import { suggestCommands, exactIndex, type CommandHint } from './palette.js';
+import {
+  newWizard,
+  renderWizard,
+  selectOptions,
+  submitAnswer,
+  wizardIsSecret,
+  wizardIsSelect,
+  wizardQuestion,
+  setExistingNamesProvider,
+  type WizardState,
+} from './setup-wizard.js';
+import {
+  deleteProfile,
+  listProfiles,
+  profileKeyStatus,
+  saveProfile,
+  PROTOCOL_LABELS,
+  AUTH_FIELD_LABELS,
+  type ModelProfile,
+} from '../model-config.js';
 
 const ANSI = {
   dim: (s: string) => `\x1b[2m${s}\x1b[22m`,
@@ -161,11 +181,16 @@ export async function runTui(opts: TuiOptions): Promise<number> {
   let activeAbort: AbortController | undefined;
   let agent = createCurrentAgent();
   let statusTimer: NodeJS.Timeout | undefined;
-  // 欢迎面板：进入工作区时显示，首次真实输出（printAbove）后永久收起
+  // 欢迎面板：进入工作区时显示，首次真实输出（printAbove）后永久收起；
+  // 用户敲任意键后蝴蝶立即冻结为静态（防频繁重绘）
   let welcomeActive = false;
+  let welcomeFrozen = false;
   // 指令联想：输入 "/" 且未出现空格时激活
   let paletteHints: CommandHint[] = [];
   let paletteIdx = 0;
+  // /setup 向导（激活时占用输入框，选择步复用 ↑↓ 导航）
+  let wizard: WizardState | null = null;
+  setExistingNamesProvider(() => Object.keys(listProfiles()));
 
   function safeContextWindow(s: ProviderSpec): number | null {
     try {
@@ -221,6 +246,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     const model = `${spec.provider}:${spec.model}`;
     if (mode.kind === 'permission') return `允许执行? ${ANSI.yellow('[y]本次允许 / [s]本次会话均允许 / [n]拒绝 (默认 n)')}`;
     if (mode.kind === 'prompt') return ANSI.bold(promptQuestion);
+    if (wizard !== null) return ANSI.bold(wizardQuestion(wizard));
     const tier = tierShortOf(agent.engine.mode);
     const busyTag = busy ? ANSI.magenta(' · 处理中…') : '';
     const queued = queuedInput !== null ? ANSI.dim(' · 已排队 1 条') : '';
@@ -272,11 +298,11 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     return s.replace(/\x1b\[[0-9;]*m/g, '').length;
   }
 
-  /** 根据编辑器内容刷新联想候选（仅主输入模式） */
+  /** 根据编辑器内容刷新联想候选（仅主输入模式；向导激活时不联想） */
   function updatePalette(): void {
-    if (mode.kind !== 'input') {
+    if (mode.kind !== 'input' || wizard !== null) {
       paletteHints = [];
-      editor.setNavCapture(false);
+      editor.setNavCapture(wizard !== null && wizardIsSelect(wizard));
       return;
     }
     paletteHints = suggestCommands(editor.text());
@@ -303,17 +329,27 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     chromeDrawn = true;
     let linesAboveBox = 0;
 
-    // 欢迎面板（左：多彩扇翅蝴蝶 + 黑白阴影艺术字；右：英文欢迎与提示）
+    // 欢迎面板（左：多彩扇翅蝴蝶 + 黑白阴影艺术字；右：英文欢迎与提示；
+    // 用户敲任意键后蝴蝶冻结为静态姿态）
     if (welcomeActive) {
       const rowsAvail = (output.rows ?? 24) - 6; // 输入框 3 + 状态 1 + 余量
       const panelH = Math.min(22, Math.max(12, rowsAvail));
-      const panel = renderPanel(cols, panelH, Date.now(), {
-        version: 'v0.1.0',
-        model: `${spec.provider}:${spec.model}`,
-        tier: tierShortOf(agent.engine.mode),
-      });
+      const panel = renderPanel(
+        cols,
+        panelH,
+        Date.now(),
+        { version: 'v0.1.0', model: `${spec.provider}:${spec.model}`, tier: tierShortOf(agent.engine.mode) },
+        welcomeFrozen,
+      );
       for (const line of panel) seq.push(`\r${line}\r\n`);
       linesAboveBox += panel.length;
+    }
+
+    // /setup 向导（Vite 式进度线）
+    if (wizard !== null) {
+      const wz = renderWizard(wizard, Math.min(cols, 64));
+      for (const line of wz) seq.push(`\r${line}\r\n`);
+      linesAboveBox += wz.length;
     }
 
     // 指令联想弹层
@@ -327,9 +363,11 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     const titleW = Math.min(displayWidth(titlePlain), cols - 6);
     seq.push(`\r┌─ ${boxTitle()} ${'─'.repeat(Math.max(1, cols - titleW - 5))}┐\r\n`);
 
-    // 内容行：❯ + 可视窗口（横向滚动）
+    // 内容行：❯ + 可视窗口（横向滚动；向导 APIKey 步掩码显示）
     const inner = Math.max(10, cols - 6);
-    const text = editor.text();
+    const rawText = editor.text();
+    const masked = wizard !== null && wizardIsSecret(wizard);
+    const text = masked ? '•'.repeat([...rawText].length) : rawText;
     const cursorCol = editor.cursorCol();
     let scroll = 0;
     if (cursorCol > inner - 2) scroll = cursorCol - (inner - 2);
@@ -412,10 +450,25 @@ export async function runTui(opts: TuiOptions): Promise<number> {
 
   input.on('data', (chunk: Buffer) => {
     const events = editor.feed(chunk.toString('utf8'));
+    // 任意按键：欢迎蝴蝶立即转为静态（防频繁重绘）
+    if (events.length > 0 && welcomeActive) welcomeFrozen = true;
     for (const ev of events) {
       if (ev.type === 'submit') {
+        if (wizard !== null) {
+          // 注意：feed() 处理 Enter 时已清空缓冲区，必须用事件携带的 text
+          handleWizardSubmit(ev.text);
+          continue;
+        }
         handleSubmit(ev.text);
       } else if (ev.type === 'interrupt') {
+        if (wizard !== null) {
+          wizard = null;
+          editor.clear();
+          editor.setNavCapture(false);
+          printAbove(`${ANSI.yellow('已取消 /setup 向导。')}\n`);
+          redraw();
+          continue;
+        }
         handleInterrupt();
       } else if (ev.type === 'eof') {
         if (mode.kind === 'input' && !busy && editor.isEmpty()) {
@@ -423,25 +476,40 @@ export async function runTui(opts: TuiOptions): Promise<number> {
           cleanup(0);
         }
       } else if (ev.type === 'nav') {
-        // 联想激活时的 ↑↓ 选择（循环滚动）
-        if (paletteHints.length > 0) {
+        // 向导选择步优先；否则指令联想选择（均循环滚动）
+        if (wizard !== null && wizardIsSelect(wizard)) {
+          const n = selectOptions(wizard).length;
+          const delta = ev.dir === 'up' ? -1 : 1;
+          wizard = { ...wizard, selIdx: (wizard.selIdx + delta + n) % n };
+          redraw();
+        } else if (paletteHints.length > 0) {
           const delta = ev.dir === 'up' ? -1 : 1;
           paletteIdx = (paletteIdx + delta + paletteHints.length) % paletteHints.length;
           redraw();
         }
       } else if (ev.type === 'escape') {
-        if (paletteHints.length > 0) {
+        if (wizard !== null) {
+          wizard = null;
+          editor.clear();
+          editor.setNavCapture(false);
+          printAbove(`${ANSI.yellow('已取消 /setup 向导。')}\n`);
+          redraw();
+        } else if (paletteHints.length > 0) {
           paletteHints = [];
           editor.setNavCapture(false);
           redraw();
         }
       } else if (ev.type === 'tab') {
-        if (paletteHints.length > 0) {
+        if (wizard !== null) {
+          // 向导中 Tab 等同确认当前步
+          handleWizardSubmit();
+        } else if (paletteHints.length > 0) {
           completeSelected();
+          redraw();
         } else {
           editor.insert('  ');
+          redraw();
         }
-        redraw();
       } else {
         // update：内容/光标变化 → 重算联想并重绘
         updatePalette();
@@ -449,6 +517,73 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       }
     }
   });
+
+  /** /setup 向导步进：确认当前答案；完成后保存档案并询问是否启用。
+   * text 为空时回退到编辑器内容（Tab 确认路径；Enter 路径必须传 ev.text，
+   * 因为 feed() 已把缓冲区清空）。 */
+  function handleWizardSubmit(text?: string): void {
+    if (wizard === null) return;
+    const { state: ns, done } = submitAnswer(wizard, text ?? editor.text());
+    editor.clear();
+    wizard = ns;
+    if (done) {
+      void finishWizard(ns);
+      return;
+    }
+    editor.setNavCapture(wizardIsSelect(ns));
+    redraw();
+  }
+
+  async function finishWizard(state: WizardState): Promise<void> {
+    const a = state.answers;
+    const name = a.profileName ?? '';
+    wizard = null;
+    editor.setNavCapture(false);
+    const existing = listProfiles()[name];
+    const apiKeyEnv = `LIWEN_KEY_${name.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+    const profile: ModelProfile = {
+      model: a.model ?? '',
+      baseUrl: a.baseUrl ?? '',
+      protocol: a.protocol ?? 'openai-chat',
+      authField: a.authField ?? 'bearer',
+      apiKeyEnv,
+      createdAt: existing?.createdAt ?? Date.now(),
+      updatedAt: Date.now(),
+    };
+    saveProfile(name, profile, a.apiKey);
+    const keyStatus = profileKeyStatus(profile);
+    printAbove(
+      [
+        `${ANSI.green(`✔ 模型档案 @${name} 已保存`)}`,
+        `  模型:   ${profile.model}`,
+        `  地址:   ${profile.baseUrl}`,
+        `  协议:   ${PROTOCOL_LABELS[profile.protocol]}`,
+        `  认证:   ${AUTH_FIELD_LABELS[profile.authField]}（密钥字段 ${profile.apiKeyEnv}，${keyStatus.set ? `已存入 ~/.liwencode/env（${keyStatus.source === 'env-file' ? 'env 文件' : '进程环境'}）` : '未设置——可稍后用 /manage 编辑补填'}）`,
+        profile.protocol === 'openai-responses' || profile.protocol === 'gemini'
+          ? `${ANSI.yellow('  注意: 该协议适配器规划于 M2，当前无法实际调用；配置已保存。')}`
+          : '',
+      ]
+        .filter((l) => l !== '')
+        .join('\n') + '\n',
+    );
+    const ask = makePrompt();
+    const activate = (await ask(`设为当前模型? [Y/n]: `)).trim().toLowerCase();
+    if (activate === '' || activate === 'y') {
+      switchModel(`@${name}`, profile.model);
+    } else {
+      printAbove(`${ANSI.dim(`保持当前模型；之后可用 /model use @${name} 启用。`)}\n`);
+    }
+    redraw();
+  }
+
+  /** /setup：启动向导（/manage 编辑入口复用，带预填） */
+  function startWizard(prefill?: Partial<{ model: string; baseUrl: string; protocol: ModelProfile['protocol']; authField: ModelProfile['authField'] }>, editing?: string): void {
+    welcomeFrozen = true;
+    wizard = newWizard(prefill, editing);
+    editor.clear();
+    editor.setNavCapture(wizardIsSelect(wizard));
+    redraw();
+  }
 
   function handleSubmit(text: string): void {
     if (mode.kind === 'permission') {
@@ -684,6 +819,12 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       case '/doctor':
         printAbove(`${formatDoctor(runDoctor(cwd))}\n`);
         return;
+      case '/setup':
+        startWizard();
+        return;
+      case '/manage':
+        await cmdManage(cmd.args);
+        return;
       case '/agents':
       case '/mcp':
       case '/goal':
@@ -875,6 +1016,62 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     agent.history.push(...compacted);
     const after = estimateMessagesTokens(agent.history, agent.registry.definitions());
     printAbove(`${ANSI.green(`已压缩: ~${before} → ~${after} tokens（清理了旧工具结果，保留最近 6 轮）。`)}\n`);
+  }
+
+  /** /manage：查看/编辑/删除已保存的自定义模型档案 */
+  async function cmdManage(args: string[]): Promise<void> {
+    const profiles = listProfiles();
+    const names = Object.keys(profiles);
+    if (names.length === 0) {
+      printAbove(`${ANSI.dim('暂无自定义模型档案。运行 /setup 创建第一个。')}\n`);
+      return;
+    }
+    const rows = names.map((n) => {
+      const p = profiles[n]!;
+      const key = profileKeyStatus(p);
+      return `  ${(('@' + n)).padEnd(16)} ${PROTOCOL_LABELS[p.protocol].padEnd(40)} ${p.model.padEnd(18)} 密钥: ${key.set ? ANSI.green('✔') : ANSI.yellow('✘')}`;
+    });
+    printAbove([`已保存模型档案（${names.length} 个）：`, ...rows].join('\n') + '\n');
+
+    const ask = makePrompt();
+    let target = args[0];
+    if (target === undefined) {
+      target = (await ask('manage which profile? (name, empty = cancel): ')).trim().replace(/^@/, '');
+    }
+    if (target === '') return;
+    const profile = profiles[target];
+    if (profile === undefined) {
+      printAbove(`${ANSI.yellow(`档案 '@${target}' 不存在。`)}\n`);
+      return;
+    }
+    printAbove(
+      [
+        `@${target}:`,
+        `  模型:   ${profile.model}`,
+        `  地址:   ${profile.baseUrl}`,
+        `  协议:   ${PROTOCOL_LABELS[profile.protocol]}`,
+        `  认证:   ${AUTH_FIELD_LABELS[profile.authField]}（${profile.apiKeyEnv}，${profileKeyStatus(profile).set ? '已设置' : '未设置'}）`,
+        `  更新:   ${new Date(profile.updatedAt).toLocaleString()}`,
+      ].join('\n') + '\n',
+    );
+    const action = (await ask('[e]dit / [d]elete / (empty = cancel): ')).trim().toLowerCase();
+    if (action === 'e' || action === 'edit') {
+      printAbove(`${ANSI.dim(`编辑 @${target}：文本步直接回车 = 沿用当前值；API Key 留空 = 不变更。`)}\n`);
+      startWizard(
+        { model: profile.model, baseUrl: profile.baseUrl, protocol: profile.protocol, authField: profile.authField },
+        target,
+      );
+      return;
+    }
+    if (action === 'd' || action === 'delete') {
+      const confirm = (await ask(`delete @${target}? [y/N]: `)).trim().toLowerCase();
+      if (confirm === 'y') {
+        deleteProfile(target);
+        printAbove(`${ANSI.green(`已删除档案 @${target}（密钥字段保留在 ~/.liwencode/env，可手动清理）。`)}\n`);
+      } else {
+        printAbove(`${ANSI.dim('已取消删除。')}\n`);
+      }
+    }
   }
 
   async function cmdResume(args: string[]): Promise<void> {

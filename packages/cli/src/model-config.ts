@@ -83,9 +83,47 @@ export interface UserModelConfig {
   baseUrl?: string;
 }
 
+/** /setup 支持的四种 API 协议（后两种的适配器规划于 M2，配置先行保存） */
+export type ProtocolKind = 'anthropic' | 'openai-chat' | 'openai-responses' | 'gemini';
+
+/** 认证字段样式（密钥以 apiKeyEnv 存于 ~/.liwencode/env，绝不入 config.json） */
+export type AuthFieldKind = 'bearer' | 'x-api-key' | 'x-goog-api-key' | 'query-key';
+
+export const PROTOCOL_LABELS: Readonly<Record<ProtocolKind, string>> = {
+  'anthropic': 'Anthropic Messages',
+  'openai-chat': 'OpenAI ChatCompletion',
+  'openai-responses': 'OpenAI Responses API (adapter M2)',
+  'gemini': 'Gemini Native GenerateContent (adapter M2)',
+};
+
+export const AUTH_FIELD_LABELS: Readonly<Record<AuthFieldKind, string>> = {
+  'bearer': 'Authorization: Bearer header',
+  'x-api-key': 'x-api-key header',
+  'x-goog-api-key': 'x-goog-api-key header',
+  'query-key': '?key= query parameter',
+};
+
+/** 自定义模型档案（/setup 创建、/manage 管理）。密钥本体在 env 文件。 */
+export interface ModelProfile {
+  /** 模型名称，如 deepseek-chat */
+  model: string;
+  /** 请求地址 */
+  baseUrl: string;
+  /** API 协议 */
+  protocol: ProtocolKind;
+  /** 认证字段样式 */
+  authField: AuthFieldKind;
+  /** 密钥所在的 env 字段名（值存 ~/.liwencode/env） */
+  apiKeyEnv: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface UserConfigFile {
   model?: UserModelConfig;
   permissionMode?: 'strict' | 'default' | 'acceptEdits' | 'plan' | 'bypass';
+  /** /setup 创建的自定义模型档案，key = 请求名称（profile 名） */
+  models?: Record<string, ModelProfile>;
 }
 
 export function readUserConfig(home?: string): UserConfigFile {
@@ -101,6 +139,65 @@ export function writeUserConfig(config: UserConfigFile, home?: string): void {
   const dir = liwenHome(home);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(userConfigPath(home), `${JSON.stringify(config, null, 2)}\n`);
+}
+
+// ── 模型档案存取（/setup · /manage） ─────────────────────────────────────
+
+/** 档案名合法字符：字母数字、- _ .（不允许空格/冒号/斜杠，避免与 provider 语法冲突） */
+export function validProfileName(name: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name) && name.length <= 48;
+}
+
+export function listProfiles(home?: string): Record<string, ModelProfile> {
+  return readUserConfig(home).models ?? {};
+}
+
+export function getProfile(name: string, home?: string): ModelProfile | undefined {
+  return readUserConfig(home).models?.[name];
+}
+
+/** 保存/覆盖档案；apiKey 非空时写入 env 文件（0600）并同步进程环境。 */
+export function saveProfile(name: string, profile: ModelProfile, apiKey: string | undefined, home?: string): void {
+  const config = readUserConfig(home);
+  config.models = config.models ?? {};
+  config.models[name] = profile;
+  writeUserConfig(config, home);
+  if (apiKey !== undefined && apiKey !== '') {
+    const envName = profile.apiKeyEnv;
+    let entries: Record<string, string> = {};
+    try {
+      entries = parseEnvFile(fs.readFileSync(envFilePath(home), 'utf8'));
+    } catch {
+      /* 首次创建 */
+    }
+    entries[envName] = apiKey;
+    writeEnvFile(entries, home);
+    if (process.env[envName] === undefined || process.env[envName] === '') process.env[envName] = apiKey;
+  }
+}
+
+export function deleteProfile(name: string, home?: string): boolean {
+  const config = readUserConfig(home);
+  if (config.models?.[name] === undefined) return false;
+  delete config.models[name];
+  // 当前默认模型指向该档案时一并回退到 mock，避免悬空引用
+  if (config.model?.provider === `@${name}`) config.model = { provider: 'mock', name: 'default' };
+  writeUserConfig(config, home);
+  return true;
+}
+
+/** 档案密钥状态（进程环境 / env 文件 / 未设置） */
+export function profileKeyStatus(profile: ModelProfile, home?: string): { set: boolean; source: 'process-env' | 'env-file' | 'none' } {
+  if (process.env[profile.apiKeyEnv] !== undefined && process.env[profile.apiKeyEnv] !== '') {
+    return { set: true, source: 'process-env' };
+  }
+  try {
+    const parsed = parseEnvFile(fs.readFileSync(envFilePath(home), 'utf8'));
+    if (parsed[profile.apiKeyEnv] !== undefined && parsed[profile.apiKeyEnv] !== '') return { set: true, source: 'env-file' };
+  } catch {
+    /* no file */
+  }
+  return { set: false, source: 'none' };
 }
 
 /** Resolve the default model spec: flag > env > user config > mock. */

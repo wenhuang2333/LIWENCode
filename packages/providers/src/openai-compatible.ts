@@ -25,6 +25,8 @@ export interface OpenAICompatibleOptions {
   id?: string;
   models?: Record<string, Partial<Capabilities>>;
   requestTimeoutMs?: number;
+  /** 认证字段样式（/setup 自定义模型）：bearer（默认）/ x-api-key 头 / query-key 查询参数 */
+  authStyle?: 'bearer' | 'x-api-key' | 'query-key';
 }
 
 interface ChatToolCall {
@@ -59,14 +61,19 @@ export function createOpenAICompatibleProvider(opts: OpenAICompatibleOptions): P
     },
     async *stream(req, { signal }): AsyncGenerator<ModelStreamEvent> {
       const body = JSON.stringify(toWire(req));
+      const authStyle = opts.authStyle ?? 'bearer';
+      const url =
+        authStyle === 'query-key'
+          ? `${opts.baseUrl}/chat/completions?key=${encodeURIComponent(opts.apiKey)}`
+          : `${opts.baseUrl}/chat/completions`;
+      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      if (authStyle === 'bearer') headers.authorization = `Bearer ${opts.apiKey}`;
+      else if (authStyle === 'x-api-key') headers['x-api-key'] = opts.apiKey;
       let res;
       try {
-        res = await opts.runtime.http.fetch(`${opts.baseUrl}/chat/completions`, {
+        res = await opts.runtime.http.fetch(url, {
           method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            authorization: `Bearer ${opts.apiKey}`,
-          },
+          headers,
           body,
           signal,
         });

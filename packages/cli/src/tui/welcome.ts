@@ -219,6 +219,8 @@ function rightColumn(info: WelcomeInfo): string[] {
 /**
  * 渲染欢迎面板：返回等宽行数组（不含换行）；终端过小返回 []。
  * panelH 由调用方按可用行数给出（12..22）。
+ * frozen = true 时蝴蝶取固定姿态（t=0 全开），用户敲任意键后调用方置位，
+ * 动画立即停止（防频繁重绘），面板保持静态直到首次输出收起。
  *
  * 布局（无中缝分隔线）：
  *   ┌────────────────────────────────────┐
@@ -227,7 +229,13 @@ function rightColumn(info: WelcomeInfo): string[] {
  *   │  L I W E N C o d e（铺满底部宽度） │   底部 6 行：黑白阴影艺术字
  *   └────────────────────────────────────┘
  */
-export function renderPanel(cols: number, panelH: number, tMs: number, info: WelcomeInfo): string[] {
+export function renderPanel(
+  cols: number,
+  panelH: number,
+  tMs: number,
+  info: WelcomeInfo,
+  frozen = false,
+): string[] {
   const panelW = Math.min(cols - 2, 88);
   if (!welcomeSupported(cols, panelH + 2) || panelH < 12) return [];
   const innerH = panelH - 2;
@@ -241,7 +249,7 @@ export function renderPanel(cols: number, panelH: number, tMs: number, info: Wel
   // 底部艺术字 6 行 + 1 空行分隔
   const artH = 6;
   const upperRows = innerH - artH - 1;
-  const butterfly = butterflyPixels(leftW, upperRows * 2, tMs);
+  const butterfly = butterflyPixels(leftW, upperRows * 2, frozen ? 0 : tMs);
   const art = artPixels(innerW);
 
   // 右侧文本在上半区垂直居中；行数不足时先删空行、再从顶部裁剪

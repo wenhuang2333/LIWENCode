@@ -24,6 +24,8 @@ export const COMMAND_HINTS: readonly CommandHint[] = [
   { name: '/clear', args: '', desc: 'Start a fresh session (history cleared)' },
   { name: '/resume', args: '[id]', desc: 'List recent sessions, or resume one by id' },
   { name: '/doctor', args: '', desc: 'Run environment and config diagnostics' },
+  { name: '/setup', args: '', desc: 'Guided model setup wizard: name, url, key, protocol, auth, profile' },
+  { name: '/manage', args: '[name]', desc: 'Manage saved model profiles: list, edit or delete' },
   { name: '/exit', args: '', desc: 'Quit liwencode' },
   { name: '/agents', args: '', desc: 'Three-role orchestration (coming soon, M3+)' },
   { name: '/goal', args: '', desc: 'Goal with deterministic acceptance (coming soon, M3+)' },

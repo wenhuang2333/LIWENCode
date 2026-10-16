@@ -306,6 +306,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case '/doctor':
         output.write(`${formatDoctor(runDoctor(cwd))}\n`);
         return;
+      case '/setup':
+      case '/manage':
+        output.write(ANSI.yellow(`${cmd.name} 需要 TUI 交互界面（进度线向导/选择列表）。请在交互式终端中运行 liwen（无管道）后使用；非交互场景可手动编辑 ~/.liwencode/config.json 的 models 字段。\n`));
+        return;
       case '/agents':
       case '/mcp':
       case '/goal':

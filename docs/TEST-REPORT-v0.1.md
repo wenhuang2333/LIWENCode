@@ -12,9 +12,9 @@
 | 验证项 | 结果 | 数量 |
 | --- | --- | --- |
 | TypeScript 严格检查（`strict` + `exactOptionalPropertyTypes` + `noUncheckedIndexedAccess`） | ✅ 0 错误 | 5 包 |
-| 单元/合约测试（vitest） | ✅ 全部通过 | **182 通过 / 0 失败**（core 59、providers 18、tools 18、testing 9、cli 78） |
+| 单元/合约测试（vitest） | ✅ 全部通过 | **199 通过 / 0 失败**（core 59、providers 19、tools 18、testing 9、cli 94） |
 | 评测集（G1 种子，确定性 MockProvider 驱动真实内核） | ✅ 全部通过 | **10/10** |
-| 错误码注册表治理检查 | ✅ 通过 | 78 码、zh-CN 齐全、可重试 14、fatal 3、DEC-007 空缺保持 |
+| 错误码注册表治理检查 | ✅ 通过 | 79 码、zh-CN 齐全、可重试 14、fatal 3、DEC-007 空缺保持 |
 | CLI 冒烟（真实进程） | ✅ 通过 | 交互式 + 非交互共 13 项；TUI pty 冒烟 2 项 |
 
 ## 2. 各包测试明细
@@ -77,7 +77,7 @@ MockProvider 请求记录与脚本耗尽语义（LW-PRV-007）；MemoryRuntime �
 
 `--version` ✓；`doctor`（12 项检查，无密钥环境正常，不泄露值）✓；`-p` mock text 输出 exit=0 ✓；`--output-format stream-json` 每行含 schemaVersion/sessionId/ts ✓；`--output-format json` 输出版本化结果对象 ✓；非法参数 exit=2 ✓；**真实工作区端到端**（read 工具读真实文件 → mock 汇报 → exit=0）✓。
 
-## 4. 测试驱动的修复与优化（20 项）
+## 4. 测试驱动的修复与优化（23 项）
 
 | # | 发现 | 修复 |
 | --- | --- | --- |
@@ -101,6 +101,9 @@ MockProvider 请求记录与脚本耗尽语义（LW-PRV-007）；MemoryRuntime �
 | 18 | **欢迎面板翼展断言发现**：蝴蝶触角横向位置做了 `/wing` 补偿，收翅时触角反向张开成 11px，翼展断言失败 | 触角位置固定不随翅膀缩放 |
 | 19 | **翼展断言再发现**：收翅点取在半周期（\|cos(π)\|=1 仍全开），与启动动画同源的 \|cos\| 周期陷阱 | 收翅断言点改为 1/4 周期 |
 | 20 | **等宽断言发现**：欢迎面板内容行分隔符实际占 7 列而公式按 8 列算，行宽 87≠88 | `leftW+rightW = panelW−7` 修正 |
+| 21 | **pty 全序列冒烟发现的严重 bug**：`/setup` 各步永远报"必填为空"卡在第 1 步——`feed()` 同步处理 Enter 时已清空缓冲区，事件循环里再读 `editor.text()` 得到空串 | 向导 submit 改用事件携带的 `ev.text`（与主输入路径一致）；Tab 确认路径回退读编辑器 |
+| 22 | 向导脚注行按硬编码 44 列补 padding，实际文本 38 列导致行宽短 6 列 | 统一走 pushRow 宽度计算 |
+| 23 | 向导编辑模式无法"回车沿用现值"（校验先于编辑语义判断） | 编辑模式下文本步空输入跳过必填校验、保留原值 |
 
 ## 5. TUI 专项（v0.1 追加，36 项单测 + pty 冒烟）
 
@@ -158,19 +161,44 @@ macOS `script` 分配 pty 驱动真实 TUI：逐字输入实时回显且光标 E
 - 欢迎面板真终端渲染：21 帧动画（150ms 刷新）、圆角标题边框、英文欢迎与提示齐全。
 - 联想全链路：`/` → 输入 `m` 过滤出 /model+/mcp → `↓` 选择 /mcp → `Enter` 补全 `/mcp ` → 输入 `list` → `Enter` 执行（占位提示输出）→ `Esc` 关闭 → `/exit` 退出。
 
-## 7. 已知限制（v0.1 范围外，按 WBS 顺延）
+## 7. /setup 向导与模型档案管理（v0.1 追加，17 项单测 + pty 全序列冒烟）
+
+### 7.1 向导状态机 `tui/setup-wizard.ts`（11 项）
+
+- 六步顺序与需求一致（名称→地址→Key→协议→认证→档案名）；kind 为 text/text/secret/select/select/text。
+- 四协议认证字段集合：anthropic=x-api-key；openai-chat=bearer/x-api-key/query-key；openai-responses=bearer/x-api-key；gemini=query-key/x-goog-api-key。
+- 完整流转六步作答 done=true、答案齐备；空模型名/非 http URL/非法或重复档案名逐项校验并停留原步；协议切换使认证字段失效时自动回退默认；编辑模式空输入沿用现值（含同名覆盖允许）。
+- 渲染：等宽行、步骤标签齐全、◉/●/○ 三态与 ❯ 选项高亮、错误行渲染、全英文。
+
+### 7.2 档案数据层（4 项）
+
+saveProfile 档案入 config.json、**密钥只入 env 文件（0600）且 config 中不含密钥本体**（BR-023 断言）；空密钥不覆盖已存；deleteProfile 删档并对悬空默认模型回退 mock；档案名校验规则。
+
+### 7.3 协议适配（providers +1 项）
+
+openai-compatible 新增 authStyle：x-api-key 头与 ?key= 查询参数按配置附着（本地 SSE mock 服务器断言实际请求头/URL）；Anthropic 固定原生认证。@profile 解析：openai-chat 档案构建适配器、未实现协议（openai-responses/gemini）抛 LW-PRV-010（注册表新增第 79 码）、未知档案报 not found。
+
+### 7.4 pty 全序列冒烟（真实终端）
+
+/setup 六步依次输入（含协议选择 ↓+Enter、认证 Enter、掩码显示）→ 保存摘要（协议/认证/密钥字段状态）→ `设为当前模型? [Y/n]` 选 n → /manage 列出档案 → 详情（协议/认证/密钥状态）→ 删除确认 → 回到"暂无档案" —— 全程通过；磁盘核对：config.json `models` 字段创建与清空、env 文件创建，密钥不进 config。
+
+### 7.5 蝴蝶冻结
+
+欢迎面板新增 frozen 参数：任意键后蝴蝶取固定姿态（t=0 全开），不同时刻渲染逐字节一致（单测断言）；pty 冒烟中确认冻结后无动画帧差异。
+
+## 8. 已知限制（v0.1 范围外，按 WBS 顺延）
 
 - 真实模型 Provider 仅经本地 SSE mock 验证合约（G2 的"真实密钥联调"待 M1 收尾/用户提供密钥后补充 DeepSeek 实测）。
 - TUI、会话恢复 CLI、自动压缩、MCP、决策层、三角色编排未实现（M2~M4 范围）。
 - 评测集为 10 项种子，G1 要求的 30 项任务集在 M1 后续扩充。
 - CI 工作流已就绪（.github/workflows/ci.yml，ubuntu/macos × Node 22），推送后首跑验证。
 
-## 8. 复现命令
+## 9. 复现命令
 
 ```bash
 corepack pnpm install
 corepack pnpm typecheck      # 0 errors
-corepack pnpm test           # 182 passed
+corepack pnpm test           # 199 passed
 corepack pnpm lint:registry  # 78 codes OK
 corepack pnpm test:evals     # 10/10
 

@@ -64,6 +64,7 @@ const TABLE: readonly Row[] = [
   { code: 'LW-PRV-007', name: 'StreamInterrupted', severity: 'warning', retryable: true, recovery: 'retry', description: 'Stream ended before message_stop.' },
   { code: 'LW-PRV-008', name: 'MalformedResponse', severity: 'error', retryable: true, recovery: 'retry', description: 'Unparsable response; retried at most once.' },
   { code: 'LW-PRV-009', name: 'ServerError', severity: 'warning', retryable: true, recovery: 'retry', description: 'HTTP 5xx / overloaded.' },
+  { code: 'LW-PRV-010', name: 'ProtocolNotImplemented', severity: 'error', retryable: false, recovery: 'reconfigure', description: 'Profile uses a protocol whose adapter is not implemented yet (openai-responses / gemini, planned M2).' },
   // ── LW-LOOP 主循环 ───────────────────────────────────────────
   { code: 'LW-LOOP-001', name: 'MaxTurnsReached', severity: 'warning', retryable: false, recovery: 'ask_user', description: 'maxTurns reached.' },
   { code: 'LW-LOOP-002', name: 'BudgetExhausted', severity: 'warning', retryable: false, recovery: 'ask_user', description: 'Token or cost limit reached.' },

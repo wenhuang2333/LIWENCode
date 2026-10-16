@@ -28,6 +28,8 @@ export const COMMAND_DOCS: readonly CommandDoc[] = [
   { name: '/clear', usage: '/clear', summary: '清空对话，开启新会话', since: 'v0.1' },
   { name: '/resume', usage: '/resume [id]', summary: '列出或恢复历史会话', since: 'v0.1' },
   { name: '/doctor', usage: '/doctor', summary: '运行环境诊断（同 liwen doctor）', since: 'v0.1' },
+  { name: '/setup', usage: '/setup', summary: '模型配置向导：名称/地址/APIKey/协议(4种)/认证字段/档案名，逐步引导保存（TUI）', since: 'v0.1' },
+  { name: '/manage', usage: '/manage', summary: '管理已保存的自定义模型档案：查看/编辑/删除（TUI）', since: 'v0.1' },
   { name: '/exit', usage: '/exit', summary: '退出（等价 /quit 或两次 Ctrl+C）', since: 'v0.1' },
   { name: '/agents', usage: '/agents', summary: '三角色编排（hyaki/sota/common）', since: 'M3+' },
   { name: '/mcp', usage: '/mcp', summary: 'MCP 服务器管理', since: 'M4+' },

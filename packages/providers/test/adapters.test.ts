@@ -185,3 +185,26 @@ describe('anthropic adapter (FR-011)', () => {
     ).rejects.toSatisfy((e) => LiwenError.is(e) && e.code === 'LW-PRV-009' && e.retryable === true);
   });
 });
+
+describe('openai-compatible authStyle (/setup custom profiles)', () => {
+  it('x-api-key header and query-key parameter attach the key as configured', async () => {
+    const server = await startSseMock(() => ({
+      status: 200,
+      events: [
+        JSON.stringify({ choices: [{ delta: { content: 'ok' } }] }),
+        JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+      ],
+    }));
+    servers.push(server);
+    const signal = new AbortController().signal;
+    const p1 = createOpenAICompatibleProvider({ runtime, baseUrl: server.url, apiKey: 'sk-x', authStyle: 'x-api-key' });
+    await drain(p1.stream({ model: 'm', messages: [userText('hi', 'u1')] }, { signal }));
+    expect(server.requests[0]?.headers['x-api-key']).toBe('sk-x');
+    expect(server.requests[0]?.headers.authorization).toBeUndefined();
+
+    const p2 = createOpenAICompatibleProvider({ runtime, baseUrl: server.url, apiKey: 'sk-q', authStyle: 'query-key' });
+    await drain(p2.stream({ model: 'm', messages: [userText('hi', 'u2')] }, { signal }));
+    expect(server.requests[1]?.url).toContain('/chat/completions?key=sk-q');
+    expect(server.requests[1]?.headers.authorization).toBeUndefined();
+  });
+});
