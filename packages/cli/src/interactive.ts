@@ -18,10 +18,10 @@ import {
   type Provider,
 } from '@liwencode/core';
 import { createBuiltinTools } from '@liwencode/tools';
-import type { CliArgs } from './args';
-import { resolvePermissionTier } from './args';
-import { buildProvider, type ProviderSpec } from './provider-select';
-import { helpText, parseSlash } from './slash';
+import type { CliArgs } from './args.js';
+import { resolvePermissionTier } from './args.js';
+import { buildProvider, type ProviderSpec } from './provider-select.js';
+import { helpText, parseSlash } from './slash.js';
 import {
   catalogEntry,
   envFilePath,
@@ -34,9 +34,9 @@ import {
   writeEnvFile,
   writeUserConfig,
   parseEnvFile,
-} from './model-config';
-import { formatDoctor, runDoctor } from './doctor';
-import { expandAtPaths, summarizeInput } from './prompt-utils';
+} from './model-config.js';
+import { formatDoctor, runDoctor } from './doctor.js';
+import { expandAtPaths, summarizeInput } from './prompt-utils.js';
 
 /**
  * Interactive REPL (FR-130 / FR-137 subset). Readline-based: streaming

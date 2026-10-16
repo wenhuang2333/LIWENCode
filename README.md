@@ -38,6 +38,28 @@ corepack pnpm exec tsx packages/cli/src/main.ts -p "hello" --output-format strea
 
 依赖构建脚本说明：pnpm ≥10 默认拦截依赖的 postinstall，本仓库已在 `pnpm-workspace.yaml` 放行 esbuild（`allowBuilds`）；若新增带安装脚本的依赖，运行 `corepack pnpm approve-builds` 审批。
 
+## Publish readiness（面向未来的 npm 发布）
+
+v0.1 内部版不发布，但打包链路已就绪并离线验证：
+
+- **构建**：每包 `tsc -p tsconfig.build.json` 产出 `dist/`（ESM JS + d.ts）；根 `corepack pnpm build` 按依赖分层构建（core → providers/tools/testing → cli）。源码相对 import 一律带 `.js` 后缀（Node ESM 标准），tsc 用 `rewriteRelativeImportExtensions` 兜底。
+- **exports 双态**：开发态 `exports` 指向 `./src/*.ts`（workspace 内部直用 TS 源，vitest/tsx 友好）；`pnpm publish`/`pnpm pack` 自动应用 `publishConfig.exports` 切到 `./dist/*.js`（含 `types` 条件）。`workspace:*` 依赖在打包时改写为真实版本号。
+- **CLI**：`bin` 为 `liwencode` 与 `liwen` 两个名字，均指向带 shebang 的 `dist/main.js`；`files` 只收 `dist/` 与 `LICENSE`；`publishConfig.access: public`（`@liwencode/*` 作用域包必须显式 public，否则发布失败）。
+- **离线验证**（发布前可重复执行）：五包 `pnpm pack` → 干净目录 `file:` 安装（用 `pnpm-workspace.yaml` overrides 模拟 registry）→ 纯 Node 实测 `liwencode --version` / `doctor` / mock `-p` 回合 / 管道 REPL / `import '@liwencode/core'` 全部通过。
+
+正式发布流程（先测试后上传，全部通过才允许发布）：
+
+```bash
+cd code
+corepack pnpm install
+corepack pnpm typecheck && corepack pnpm test && corepack pnpm test:evals   # 必须全绿
+corepack pnpm build
+# 按依赖顺序发布：core → providers/tools/testing → cli（CLI 依赖前四者，逆序会解析失败）
+for p in core providers tools testing cli; do (cd packages/$p && corepack pnpm publish --access public); done
+```
+
+> 注意：`@liwencode/testing` 是 CLI 的运行时依赖（`mock` provider 的 MockProvider 属于产品功能），其主入口不依赖 vitest（合约套件在 `./contract` 子路径，仅开发用）。
+
 ## Design invariants (do not break)
 
 - Deny > ask > allow; **no model output can upgrade a deny** (BR-001/026/027).

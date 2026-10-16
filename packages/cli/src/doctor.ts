@@ -1,5 +1,5 @@
 import * as fs from 'node:fs';
-import { parseModelSpec } from './provider-select';
+import { parseModelSpec } from './provider-select.js';
 
 /**
  * liwen doctor (FR-173): runs with NO provider keys. Checks Node version,

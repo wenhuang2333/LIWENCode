@@ -11,7 +11,9 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "pnpm run typecheck && pnpm run build"
   },
   "dependencies": {
     "@liwencode/core": "workspace:*",
@@ -21,5 +23,31 @@
     "@types/node": "^22.10.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wenhuang2333/LIWENCode.git"
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./contract": {
+        "types": "./dist/contract.d.ts",
+        "default": "./dist/contract.js"
+      }
+    }
   }
 }

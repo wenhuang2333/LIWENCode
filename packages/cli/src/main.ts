@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { loadConfig, nodeRuntime, LiwenError } from '@liwencode/core';
-import { USAGE, parseArgs, UsageError } from './args';
-import { EXIT_OK, EXIT_USAGE, runPrint } from './run';
-import { formatDoctor, runDoctor } from './doctor';
-import { runInteractive } from './interactive';
-import { runTui } from './tui/tui';
-import { loadSecretsIntoEnv } from './model-config';
+import { USAGE, parseArgs, UsageError } from './args.js';
+import { EXIT_OK, EXIT_USAGE, runPrint } from './run.js';
+import { formatDoctor, runDoctor } from './doctor.js';
+import { runInteractive } from './interactive.js';
+import { runTui } from './tui/tui.js';
+import { loadSecretsIntoEnv } from './model-config.js';
 
 export const VERSION = 'liwen v0.1.0 (LIWENCode internal, M0+M1)';
 

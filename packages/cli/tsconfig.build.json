@@ -1,0 +1,29 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "allowImportingTsExtensions": false,
+    "outDir": "dist",
+    "rootDir": "src",
+    "sourceMap": false,
+    "declarationMap": false,
+    "rewriteRelativeImportExtensions": true,
+    "paths": {
+      "@liwencode/core": [
+        "../core/dist/index.d.ts"
+      ],
+      "@liwencode/providers": [
+        "../providers/dist/index.d.ts"
+      ],
+      "@liwencode/tools": [
+        "../tools/dist/index.d.ts"
+      ],
+      "@liwencode/testing": [
+        "../testing/dist/index.d.ts"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*.ts"
+  ]
+}

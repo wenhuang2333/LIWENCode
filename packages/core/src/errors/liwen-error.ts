@@ -1,4 +1,4 @@
-import { requireError, type ErrorCodeEntry, type ErrorCategory, type Recovery, type Severity } from './registry';
+import { requireError, type ErrorCodeEntry, type ErrorCategory, type Recovery, type Severity } from './registry.js';
 
 export interface SerializedError {
   code: string;

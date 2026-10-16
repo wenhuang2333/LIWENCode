@@ -1,5 +1,5 @@
-import type { Message } from './types';
-import type { ToolDefinition } from './provider';
+import type { Message } from './types.js';
+import type { ToolDefinition } from './provider.js';
 
 /**
  * Context assembly & token estimation (DD-6). v0.1 implements the stable

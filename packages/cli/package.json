@@ -5,12 +5,15 @@
   "type": "module",
   "license": "Apache-2.0",
   "bin": {
-    "liwen": "./src/main.ts"
+    "liwencode": "./dist/main.js",
+    "liwen": "./dist/main.js"
   },
   "sideEffects": false,
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "pnpm run typecheck && pnpm run build"
   },
   "dependencies": {
     "@liwencode/core": "workspace:*",
@@ -24,5 +27,27 @@
     "typescript": "^5.7.0",
     "vitest": "^3.0.0",
     "tsx": "^4.19.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wenhuang2333/LIWENCode.git"
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/main.js",
+    "types": "./dist/main.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/main.d.ts",
+        "default": "./dist/main.js"
+      }
+    }
   }
 }

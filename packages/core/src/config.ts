@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import type { Runtime } from './runtime';
-import type { PermissionMode } from './events';
-import type { PermissionRule } from './permissions';
-import { LiwenError } from './errors/liwen-error';
+import type { Runtime } from './runtime/index.js';
+import type { PermissionMode } from './events.js';
+import type { PermissionRule } from './permissions.js';
+import { LiwenError } from './errors/liwen-error.js';
 
 /**
  * Layered configuration (FR-120, BR-024). Precedence:

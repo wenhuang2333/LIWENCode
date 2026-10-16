@@ -2,8 +2,8 @@ import { nodeRuntime, type Provider } from '@liwencode/core';
 import { createAnthropicProvider, createOpenAICompatibleProvider } from '@liwencode/providers';
 import { MockProvider } from '@liwencode/testing';
 import type { Message } from '@liwencode/core';
-import type { CliArgs } from './args';
-import { catalogEntry, resolveDefaultModel } from './model-config';
+import type { CliArgs } from './args.js';
+import { catalogEntry, resolveDefaultModel } from './model-config.js';
 
 /**
  * Provider resolution for the CLI. `mock:` runs fully offline; real providers

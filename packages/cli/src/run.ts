@@ -11,10 +11,10 @@ import {
 import { createBuiltinTools } from '@liwencode/tools';
 import { createOpenAICompatibleProvider, createAnthropicProvider } from '@liwencode/providers';
 import { MockProvider } from '@liwencode/testing';
-import type { CliArgs } from './args';
-import { resolvePermissionTier } from './args';
-import { readUserConfig } from './model-config';
-import { resolveProvider } from './provider-select';
+import type { CliArgs } from './args.js';
+import { resolvePermissionTier } from './args.js';
+import { readUserConfig } from './model-config.js';
+import { resolveProvider } from './provider-select.js';
 
 /** BR-042 exit codes. */
 export const EXIT_OK = 0;

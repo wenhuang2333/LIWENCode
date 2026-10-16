@@ -9,7 +9,7 @@ import {
   type Provider,
   type Runtime,
 } from '@liwencode/core';
-import { sseEvents } from './sse';
+import { sseEvents } from './sse.js';
 
 /**
  * Native Anthropic Messages adapter (FR-011) — the "native official"

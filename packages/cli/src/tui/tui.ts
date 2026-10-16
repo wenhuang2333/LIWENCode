@@ -35,10 +35,10 @@ import {
   type Provider,
 } from '@liwencode/core';
 import { createBuiltinTools } from '@liwencode/tools';
-import type { CliArgs } from '../args';
-import { resolvePermissionTier } from '../args';
-import { buildProvider, type ProviderSpec } from '../provider-select';
-import { helpText, parseSlash } from '../slash';
+import type { CliArgs } from '../args.js';
+import { resolvePermissionTier } from '../args.js';
+import { buildProvider, type ProviderSpec } from '../provider-select.js';
+import { helpText, parseSlash } from '../slash.js';
 import {
   catalogEntry,
   envFilePath,
@@ -51,13 +51,13 @@ import {
   writeEnvFile,
   writeUserConfig,
   parseEnvFile,
-} from '../model-config';
-import { formatDoctor, runDoctor } from '../doctor';
-import { expandAtPaths, summarizeInput } from '../prompt-utils';
-import { BootAnimation, bootSupported } from './boot';
-import { LineEditor } from './editor';
-import { StatusTracker, formatStatusLine } from './status';
-import { displayWidth, truncateToWidth } from './width';
+} from '../model-config.js';
+import { formatDoctor, runDoctor } from '../doctor.js';
+import { expandAtPaths, summarizeInput } from '../prompt-utils.js';
+import { BootAnimation, bootSupported } from './boot.js';
+import { LineEditor } from './editor.js';
+import { StatusTracker, formatStatusLine } from './status.js';
+import { displayWidth, truncateToWidth } from './width.js';
 
 const ANSI = {
   dim: (s: string) => `\x1b[2m${s}\x1b[22m`,

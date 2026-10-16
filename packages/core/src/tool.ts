@@ -1,6 +1,6 @@
 import type { z } from 'zod';
-import type { ContentBlock, ToolResultContent } from './types';
-import type { Runtime } from './runtime';
+import type { ContentBlock, ToolResultContent } from './types.js';
+import type { Runtime } from './runtime/index.js';
 
 /** Tool contract (DD-4). Zod is the single schema source (ADR-07). */
 export type ToolRisk = 'read' | 'write' | 'exec' | 'network' | 'meta';

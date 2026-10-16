@@ -1,8 +1,8 @@
-import type { Runtime } from './runtime';
-import type { ToolRegistry } from './tool';
-import type { PermissionEngine } from './permissions';
-import type { ToolCall, ToolResultBlock, ToolResultContent } from './types';
-import { LiwenError, ToolError } from './errors/liwen-error';
+import type { Runtime } from './runtime/index.js';
+import type { ToolRegistry } from './tool.js';
+import type { PermissionEngine } from './permissions.js';
+import type { ToolCall, ToolResultBlock, ToolResultContent } from './types.js';
+import { LiwenError, ToolError } from './errors/liwen-error.js';
 
 /**
  * Tool execution pipeline (DD-4, BR-025):

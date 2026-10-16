@@ -1,5 +1,5 @@
-import type { Runtime } from '../runtime';
-import { SessionError } from '../errors/liwen-error';
+import type { Runtime } from '../runtime/index.js';
+import { SessionError } from '../errors/liwen-error.js';
 
 /**
  * Append-only event log as the source of truth (ADR-05, DD-7, BR-016).

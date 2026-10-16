@@ -1,3 +1,3 @@
-export { MemoryRuntime, FakeClock } from './memory-runtime';
-export { MockProvider, mockToolUse, mockText } from './mock-provider';
-export type { MockProviderOptions } from './mock-provider';
+export { MemoryRuntime, FakeClock } from './memory-runtime.js';
+export { MockProvider, mockToolUse, mockText } from './mock-provider.js';
+export type { MockProviderOptions } from './mock-provider.js';

@@ -10,12 +10,14 @@
     "node": ">=22"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   },
   "scripts": {
     "start": "tsx packages/cli/src/main.ts",
     "cli": "tsx packages/cli/src/main.ts",
-    "build": "pnpm -r --filter './packages/*' run build",
+    "build": "pnpm --filter @liwencode/core run build && pnpm --filter \"@liwencode/providers\" --filter \"@liwencode/tools\" --filter \"@liwencode/testing\" run build && pnpm --filter liwencode run build",
     "typecheck": "pnpm -r --filter './packages/*' run typecheck",
     "test": "pnpm -r --filter './packages/*' run test",
     "test:evals": "pnpm exec tsx evals/run-eval.ts",

@@ -1,15 +1,15 @@
 import type { Tool } from '@liwencode/core';
-import { FileStateTracker } from './file-state';
-import { createReadTool, createWriteTool, createEditTool } from './fs-tools';
-import { createGlobTool, createGrepTool } from './search-tools';
-import { createBashTool } from './bash';
+import { FileStateTracker } from './file-state.js';
+import { createReadTool, createWriteTool, createEditTool } from './fs-tools.js';
+import { createGlobTool, createGrepTool } from './search-tools.js';
+import { createBashTool } from './bash.js';
 
-export { FileStateTracker } from './file-state';
-export type { FileState } from './file-state';
-export { createReadTool, createWriteTool, createEditTool } from './fs-tools';
-export { createGlobTool, createGrepTool, loadGitignore, isIgnored } from './search-tools';
-export type { IgnoreRules } from './search-tools';
-export { createBashTool } from './bash';
+export { FileStateTracker } from './file-state.js';
+export type { FileState } from './file-state.js';
+export { createReadTool, createWriteTool, createEditTool } from './fs-tools.js';
+export { createGlobTool, createGrepTool, loadGitignore, isIgnored } from './search-tools.js';
+export type { IgnoreRules } from './search-tools.js';
+export { createBashTool } from './bash.js';
 
 export interface BuiltinToolsOptions {
   bash?: { defaultTimeoutMs?: number };

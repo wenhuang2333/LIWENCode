@@ -9,7 +9,7 @@ import {
   type Provider,
   type Runtime,
 } from '@liwencode/core';
-import { sseEvents } from './sse';
+import { sseEvents } from './sse.js';
 
 /**
  * OpenAI Chat Completions adapter (FR-012) — also serves DeepSeek and other

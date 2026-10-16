@@ -1,7 +1,7 @@
-import type { Runtime } from './runtime';
-import type { PermissionSubject, Tool, ToolRisk } from './tool';
-import { PermissionError } from './errors/liwen-error';
-import type { PermissionMode } from './events';
+import type { Runtime } from './runtime/index.js';
+import type { PermissionSubject, Tool, ToolRisk } from './tool.js';
+import { PermissionError } from './errors/liwen-error.js';
+import type { PermissionMode } from './events.js';
 
 /**
  * Deterministic permission engine (DD-5, BR-001..BR-006, BR-021..BR-024).

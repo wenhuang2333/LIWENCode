@@ -1,6 +1,6 @@
-import type { ContentBlock, Message, StopReason, Usage } from './types';
-import type { Runtime } from './runtime';
-import { LiwenError, ProviderError } from './errors/liwen-error';
+import type { ContentBlock, Message, StopReason, Usage } from './types.js';
+import type { Runtime } from './runtime/index.js';
+import { LiwenError, ProviderError } from './errors/liwen-error.js';
 
 /**
  * Provider abstraction (DD-3). Adapters live in @liwencode/providers; the

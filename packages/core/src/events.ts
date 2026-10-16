@@ -1,5 +1,5 @@
-import type { ContentBlock, Message, StopReason, ToolCall, Usage } from './types';
-import type { SerializedError } from './errors/liwen-error';
+import type { ContentBlock, Message, StopReason, ToolCall, Usage } from './types.js';
+import type { SerializedError } from './errors/liwen-error.js';
 
 /**
  * The event stream is the single outward-facing output of a run (ADR-02).

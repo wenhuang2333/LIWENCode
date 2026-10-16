@@ -13,9 +13,9 @@ import {
   type Runtime,
   type Shell,
   type ShellSpawnOptions,
-} from './index';
+} from './index.js';
 
-export type { HttpResponse } from './index';
+export type { HttpResponse } from './index.js';
 
 class NodeFileSystem implements FileSystem {
   async readFile(path: string): Promise<string> {
