@@ -10,10 +10,13 @@
  *
  * 实现要点：
  * - 底部锚定：ESC7（保存光标）/ ESC8（恢复）+ ESC[J（清除下方），
- *   输出文本在 chrome 上方追加时先撤下 chrome、写完再重画（无闪烁）。
+ *   输出文本在 chrome 上方追加时先撤下 chrome、写完再重画。
+ * - chrome 帧差分渲染（消除闪烁）：同高/收缩帧只原位重写变化行（收缩帧贴原帧
+ *   底部、上方多余行清空；内容未变时零写入），增高帧才全量重画；整帧写入用
+ *   synchronized update（DEC 2026）包裹，支持它的终端原子交换。
  * - 输入：raw 模式 + LineEditor（CJK 安全、历史、光标块）。
  * - 权限审批 / 交互式提问复用同一编辑器（mode 切换，问题显示在框标题）。
- * - 状态栏：StatusTracker 实时指标，250ms 定时刷新（流式期间 tok/s 实时变化）。
+ * - 状态栏：StatusTracker 实时指标，150ms 定时刷新（差分渲染下仅变化行重写）。
  */
 
 import { stdin as input, stdout as output } from 'node:process';
@@ -38,7 +41,7 @@ import { createBuiltinTools } from '@liwencode/tools';
 import type { CliArgs } from '../args.js';
 import { resolvePermissionTier } from '../args.js';
 import { buildProvider, type ProviderSpec } from '../provider-select.js';
-import { helpText, parseSlash } from '../slash.js';
+import { helpText, parsePermissionArg, parseSlash, permissionModeShort, permissionTierPanel } from '../slash.js';
 import {
   catalogEntry,
   envFilePath,
@@ -59,7 +62,7 @@ import { LineEditor } from './editor.js';
 import { StatusTracker, formatStatusLine } from './status.js';
 import { displayWidth, truncateToWidth } from './width.js';
 import { renderPanel, welcomeSupported } from './welcome.js';
-import { suggestCommands, exactIndex, type CommandHint } from './palette.js';
+import { suggestCommands, exactIndex, paletteWindow, type CommandHint } from './palette.js';
 import {
   newWizard,
   renderWizard,
@@ -94,8 +97,14 @@ const ANSI = {
 const SAVE = '\x1b7';
 const RESTORE = '\x1b8';
 const CLEAR_BELOW = '\x1b[J';
+const ERASE_EOL = '\x1b[K';
+const CUD1 = '\x1b[1B';
 const HIDE_CURSOR = '\x1b[?25l';
 const SHOW_CURSOR = '\x1b[?25h';
+// 同步输出（synchronized update, DEC 2026）：支持它的终端把整帧原子交换，
+// 不支持者按未知私有模式忽略——用于消除全量重绘路径的中间空白帧。
+const SYNC_ON = '\x1b[?2026h';
+const SYNC_OFF = '\x1b[?2026l';
 
 export interface TuiOptions {
   args: CliArgs;
@@ -173,6 +182,10 @@ export async function runTui(opts: TuiOptions): Promise<number> {
 
   // ── chrome（输入框 + 状态栏）状态 ──
   let chromeDrawn = false;
+  /** 上一帧逐行内容（含 ANSI）；用于差分重绘，null = 屏幕内容已失效需全量重画 */
+  let lastFrame: string[] | null = null;
+  /** 帧首行相对锚点（ESC7 保存位）的行偏移；收缩帧保持底部锚定时 > 0 */
+  let frameInset = 0;
   let busy = false;
   let queuedInput: string | null = null;
   type EditorMode = { kind: 'input' } | { kind: 'permission'; resolve: (a: string) => void } | { kind: 'prompt'; resolve: (a: string) => void };
@@ -230,7 +243,8 @@ export async function runTui(opts: TuiOptions): Promise<number> {
 
   /** 在 chrome 上方打印文本（文本以换行结尾时正好贴住 chrome 顶部）。
    * raw 模式下终端不做 NL→CRNL 转换，统一在此归一化。
-   * 首次真实输出即收起欢迎面板（工作区开始承接内容）。 */
+   * 首次真实输出即收起欢迎面板（工作区开始承接内容）。
+   * 注意：清除下方后屏幕 chrome 区域失效 → lastFrame 置空，下次绘制走全量路径。 */
   function printAbove(text: string): void {
     welcomeActive = false;
     const nl = text.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
@@ -238,8 +252,10 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     if (chromeDrawn) parts.push(RESTORE, CLEAR_BELOW);
     parts.push(nl);
     if (!nl.endsWith('\r\n')) parts.push('\r\n');
-    output.write(parts.join(''));
+    output.write(SYNC_ON + parts.join('') + SYNC_OFF);
     chromeDrawn = false;
+    lastFrame = null;
+    frameInset = 0;
   }
 
   function boxTitle(): string {
@@ -247,49 +263,48 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     if (mode.kind === 'permission') return `允许执行? ${ANSI.yellow('[y]本次允许 / [s]本次会话均允许 / [n]拒绝 (默认 n)')}`;
     if (mode.kind === 'prompt') return ANSI.bold(promptQuestion);
     if (wizard !== null) return ANSI.bold(wizardQuestion(wizard));
-    const tier = tierShortOf(agent.engine.mode);
+    const tier = permissionModeShort(agent.engine.mode);
     const busyTag = busy ? ANSI.magenta(' · 处理中…') : '';
     const queued = queuedInput !== null ? ANSI.dim(' · 已排队 1 条') : '';
     return `${ANSI.cyan(`liwen (${model})`)}${busyTag}${queued} ${ANSI.dim(`· ${tier}`)}`;
   }
 
-  function tierShortOf(m: PermissionMode): string {
-    switch (m) {
-      case 'strict': return '严格档：均需确认';
-      case 'default': return '部分权限：读免确认';
-      case 'acceptEdits': return 'acceptEdits';
-      case 'plan': return 'plan 只读';
-      case 'bypass': return '完全权限：免确认';
-    }
+  /** 联想弹层可视行数上限：终端高度扣除输入框(3)/状态(1)/弹层边框等(5)/顶部余量(1) */
+  function paletteViewMax(total: number): number {
+    const rows = output.rows ?? 24;
+    return Math.max(4, Math.min(total, rows - 10));
   }
 
-  /** 指令联想弹层（输入框上方） */
+  /** 指令联想弹层（输入框上方）：全量候选 + 每行中文简介 + 视窗滚动 */
   function renderPalette(cols: number): string[] {
     const w = Math.min(cols, 72);
+    const total = paletteHints.length;
+    const { start, end } = paletteWindow(total, paletteIdx, paletteViewMax(total));
+    const windowed = end - start < total;
+    const title = windowed ? ` commands ${start + 1}-${end}/${total} ` : ` commands (${total}) `;
     const lines: string[] = [];
-    const title = ' commands ';
     const fill = w - 2 - title.length;
     lines.push(`╭${'─'.repeat(Math.floor(fill / 2))}${title}${'─'.repeat(fill - Math.floor(fill / 2))}╮`);
-    for (let i = 0; i < paletteHints.length; i++) {
+    for (let i = start; i < end; i++) {
       const h = paletteHints[i]!;
       const selected = i === paletteIdx;
       const marker = selected ? '❯ ' : '  ';
-      const name = h.name.padEnd(11);
-      const args = h.args.padEnd(18);
-      const rowPlain = ` ${marker}${name} ${args}`;
+      const name = h.name.padEnd(13);
+      const rowPlain = ` ${marker}${name} ${h.brief}`;
       const pad = w - 2 - plainLenOf(rowPlain);
       const row = selected
-        ? `\x1b[7m ${marker}${ANSI.green(h.name.padEnd(11))} ${args}${' '.repeat(Math.max(0, pad))}\x1b[27m`
-        : ` ${marker}${ANSI.green(h.name.padEnd(11))} ${ANSI.dim(args)}${' '.repeat(Math.max(0, pad))}`;
+        ? `\x1b[7m ${marker}${ANSI.green(name)} ${h.brief}${' '.repeat(Math.max(0, pad))}\x1b[27m`
+        : ` ${marker}${ANSI.green(name)} ${ANSI.dim(h.brief)}${' '.repeat(Math.max(0, pad))}`;
       lines.push(`│${row}│`);
     }
-    // 选中项说明 + 键位提示
+    // 选中项用法 + 键位提示
     const sel = paletteHints[paletteIdx]!;
-    const [desc] = truncateToWidth(sel.desc, w - 6);
+    const usage = `用法: ${sel.name}${sel.args !== '' ? ` ${sel.args}` : ''}`;
+    const [usageShown] = truncateToWidth(usage, w - 6);
     lines.push(`├${'─'.repeat(w - 2)}┤`);
-    lines.push(`│ ${ANSI.bold(desc)}${' '.repeat(Math.max(0, w - 4 - displayWidth(desc)))} │`);
-    const keys = '↑↓ select · Tab/Enter complete · Esc close';
-    lines.push(`│ ${ANSI.dim(keys)}${' '.repeat(Math.max(0, w - 4 - keys.length))} │`);
+    lines.push(`│ ${ANSI.dim(usageShown)}${' '.repeat(Math.max(0, w - 4 - displayWidth(usageShown)))} │`);
+    const keys = '↑↓ 选择 · Tab/Enter 补全 · Esc 关闭';
+    lines.push(`│ ${ANSI.dim(keys)}${' '.repeat(Math.max(0, w - 4 - displayWidth(keys)))} │`);
     lines.push(`╰${'─'.repeat(w - 2)}╯`);
     return lines;
   }
@@ -306,6 +321,11 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       return;
     }
     paletteHints = suggestCommands(editor.text());
+    if (paletteHints.length > 0) {
+      // 打开联想即收起欢迎面板：弹层要占满输入框上方的空间，
+      // 与最高 22 行的欢迎面板叠加会超出屏幕（此时用户已开始指挥工作区，splash 完成使命）
+      welcomeActive = false;
+    }
     const exact = exactIndex(paletteHints, editor.text());
     paletteIdx = paletteHints.length > 0 ? (exact >= 0 ? exact : 0) : 0;
     editor.setNavCapture(paletteHints.length > 0);
@@ -319,15 +339,9 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     editor.setNavCapture(false);
   }
 
-  /** 画欢迎面板（可选）+ 联想弹层（可选）+ 输入框（3 行）+ 状态行，并定位光标 */
-  function drawChrome(): void {
-    // pty/极窄终端下列数可能为 0，做下限保护（repeat 负数会抛错）
-    const cols = Math.max(24, output.columns ?? 80);
-    const seq: string[] = [];
-    seq.push(chromeDrawn ? RESTORE : SAVE);
-    if (chromeDrawn) seq.push(CLEAR_BELOW);
-    chromeDrawn = true;
-    let linesAboveBox = 0;
+  /** 组装 chrome 帧：欢迎面板（可选）+ 向导（可选）+ 联想弹层（可选）+ 输入框(3) + 状态行 */
+  function buildChromeFrame(cols: number): { lines: string[]; aboveBox: number; cursorVisCol: number } {
+    const lines: string[] = [];
 
     // 欢迎面板（左：多彩扇翅蝴蝶 + 黑白阴影艺术字；右：英文欢迎与提示；
     // 用户敲任意键后蝴蝶冻结为静态姿态）
@@ -338,30 +352,28 @@ export async function runTui(opts: TuiOptions): Promise<number> {
         cols,
         panelH,
         Date.now(),
-        { version: 'v0.1.0', model: `${spec.provider}:${spec.model}`, tier: tierShortOf(agent.engine.mode) },
+        { version: 'v0.1.0', model: `${spec.provider}:${spec.model}`, tier: permissionModeShort(agent.engine.mode) },
         welcomeFrozen,
       );
-      for (const line of panel) seq.push(`\r${line}\r\n`);
-      linesAboveBox += panel.length;
+      lines.push(...panel);
     }
 
     // /setup 向导（Vite 式进度线）
     if (wizard !== null) {
-      const wz = renderWizard(wizard, Math.min(cols, 64));
-      for (const line of wz) seq.push(`\r${line}\r\n`);
-      linesAboveBox += wz.length;
+      lines.push(...renderWizard(wizard, Math.min(cols, 64)));
     }
 
     // 指令联想弹层
     if (paletteHints.length > 0) {
-      for (const line of renderPalette(cols)) seq.push(`\r${line}\r\n`);
-      linesAboveBox += paletteHints.length + 5; // 顶框+列表+分隔+说明+键位+底框
+      lines.push(...renderPalette(cols));
     }
+
+    const aboveBox = lines.length;
 
     // 边框宽度按纯文本列宽计算（boxTitle 含 ANSI，先量后截）
     const titlePlain = stripAnsi(boxTitle());
     const titleW = Math.min(displayWidth(titlePlain), cols - 6);
-    seq.push(`\r┌─ ${boxTitle()} ${'─'.repeat(Math.max(1, cols - titleW - 5))}┐\r\n`);
+    lines.push(`┌─ ${boxTitle()} ${'─'.repeat(Math.max(1, cols - titleW - 5))}┐`);
 
     // 内容行：❯ + 可视窗口（横向滚动；向导 APIKey 步掩码显示）
     const inner = Math.max(10, cols - 6);
@@ -372,23 +384,72 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     let scroll = 0;
     if (cursorCol > inner - 2) scroll = cursorCol - (inner - 2);
     const [visible] = truncateToWidth(text.slice(idxOfCol(text, scroll)), inner);
-    seq.push(`\r│ ${ANSI.cyan('❯ ')}${visible}`);
     const pad = inner - displayWidth(visible) + 1;
-    seq.push(' '.repeat(Math.max(1, pad)));
-    seq.push('│\r\n');
+    lines.push(`│ ${ANSI.cyan('❯ ')}${visible}${' '.repeat(Math.max(1, pad))}│`);
 
-    seq.push(`\r└${'─'.repeat(cols - 2)}┘\r\n`);
+    lines.push(`└${'─'.repeat(cols - 2)}┘`);
 
     const snap = tracker.snapshot(Date.now());
     const status = formatStatusLine(snap, cols - 2);
-    seq.push(`\r ${ANSI.dim(status)}\r\n`);
+    lines.push(` ${ANSI.dim(status)}`);
 
-    // 光标定位：回到 chrome 起点 → 跳过弹层/面板与框顶 → 内容行 → 右移到光标列
-    seq.push(RESTORE);
-    seq.push(`\x1b[${linesAboveBox + 2}B`); // 下移到内容行（框顶 1 + 内容 1）
-    const cursorVisCol = Math.min(cursorCol - scroll, inner - 2);
-    seq.push(`\x1b[${2 + 2 + cursorVisCol}C`); // '│ ' + '❯ ' 之后
-    output.write(seq.join(''));
+    return { lines, aboveBox, cursorVisCol: Math.min(cursorCol - scroll, inner - 2) };
+  }
+
+  /**
+   * 绘制 chrome 帧（差分渲染，消除闪烁）：
+   * - 同高/收缩帧：逐行比较，只原位重写变化行（不清屏、不整块擦除）；收缩时
+   *   保持底部锚定——新帧贴原帧底、上方多余行原位清空；
+   * - 增高帧 / 首次 / 屏幕内容失效（printAbove、resize 后）：全量重画；
+   * - 内容完全未变：跳过任何写入（空闲零输出，150ms 定时器不再造成周期性闪烁）。
+   * 光标定位到输入行（帧内 aboveBox+1 行）文本末尾——旧实现 +2 会让光标落在
+   * 框底边框行（已修正）。
+   * 全帧写入用 synchronized update 包裹，支持它的终端整帧原子交换。
+   */
+  function paintChromeFrame(frame: { lines: string[]; aboveBox: number; cursorVisCol: number }): void {
+    const { lines, aboveBox, cursorVisCol } = frame;
+
+    if (chromeDrawn && lastFrame !== null && lines.length <= lastFrame.length) {
+      const old = lastFrame;
+      const d = old.length - lines.length; // 帧收缩 → 顶部空出的行数（保持底部锚定）
+      const inset = frameInset + d; // 新帧首行相对锚点的行偏移
+      const seq: string[] = [RESTORE];
+      let changed = d > 0;
+      if (frameInset > 0) seq.push(`\x1b[${frameInset}B`); // 移到旧帧首行
+      for (let i = 0; i < d; i++) seq.push('\r', ERASE_EOL, CUD1); // 清空收缩让出的行
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i] !== old[d + i]) {
+          seq.push('\r', lines[i]!, ERASE_EOL);
+          changed = true;
+        }
+        if (i < lines.length - 1) seq.push(CUD1);
+      }
+      if (!changed) return; // 内容未变：光标仍在上帧定位处，无需任何写入
+      seq.push(RESTORE, `\x1b[${aboveBox + 1 + inset}B`, `\x1b[${4 + cursorVisCol}C`);
+      output.write(SYNC_ON + seq.join('') + SYNC_OFF);
+      chromeDrawn = true;
+      lastFrame = lines;
+      frameInset = inset;
+      return;
+    }
+
+    // 全量路径：首次绘制 / 屏幕内容失效 / 帧增高（必要时自然滚动）
+    const seq: string[] = [];
+    seq.push(chromeDrawn ? RESTORE : SAVE);
+    if (chromeDrawn) seq.push(CLEAR_BELOW);
+    for (const line of lines) seq.push(`\r${line}\r\n`);
+    seq.push(RESTORE, `\x1b[${aboveBox + 1}B`, `\x1b[${4 + cursorVisCol}C`);
+    output.write(SYNC_ON + seq.join('') + SYNC_OFF);
+    chromeDrawn = true;
+    lastFrame = lines;
+    frameInset = 0;
+  }
+
+  /** 画欢迎面板（可选）+ 联想弹层（可选）+ 输入框（3 行）+ 状态行，并定位光标 */
+  function drawChrome(): void {
+    // pty/极窄终端下列数可能为 0，做下限保护（repeat 负数会抛错）
+    const cols = Math.max(24, output.columns ?? 80);
+    paintChromeFrame(buildChromeFrame(cols));
   }
 
   /** 计算横向滚动起点对应的码点索引 */
@@ -794,8 +855,9 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       case '/model':
         await cmdModel(cmd.args);
         return;
+      case '/permission':
       case '/permissions':
-        cmdPermissions(cmd.args);
+        cmdPermissions(cmd.args, cmd.name);
         return;
       case '/status':
         cmdStatus();
@@ -945,17 +1007,18 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     switchModel(entry.id, model);
   }
 
-  function cmdPermissions(args: string[]): void {
+  function cmdPermissions(args: string[], invokedAs = '/permissions'): void {
     if (args.length === 0) {
       const rules = sessionRules.length > 0
         ? sessionRules.map((r) => `  ${r.effect.padEnd(5)} ${r.tool}${r.match?.command !== undefined ? `  cmd=${r.match.command}` : ''}${r.match?.path !== undefined ? `  path=${r.match.path}` : ''}`).join('\n')
         : '  (无临时规则)';
       printAbove(
         [
-          `权限模式: ${ANSI.bold(agent.engine.mode)}（当前档位: ${tierShortOf(agent.engine.mode)}）`,
-          '临时规则:',
+          `权限模式: ${ANSI.bold(agent.engine.mode)}（当前档位: ${permissionModeShort(agent.engine.mode)}）`,
+          ...permissionTierPanel(agent.engine.mode),
+          '本会话临时规则:',
           rules,
-          '调整: /permissions mode <mode> | /permissions allow <tool|pattern> | /permissions deny <tool|pattern>',
+          `调整: ${invokedAs} <档位> | ${invokedAs} mode <m> | ${invokedAs} allow|deny <tool>`,
         ].join('\n') + '\n',
       );
       return;
@@ -978,7 +1041,17 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       printAbove(`${ANSI.green(`已添加 ${args[0]} 规则: ${args[1]}（仅本次会话）。`)}\n`);
       return;
     }
-    printAbove(`${ANSI.yellow('用法: /permissions [mode <m> | allow <tool> | deny <tool>]')}\n`);
+    // 直接切换档位：/permission strict | HuangAura | WenNova（大小写/连字符不敏感）
+    const tier = parsePermissionArg(args[0]!);
+    if (tier !== null) {
+      agent.engine.setMode(tier.mode);
+      permissionMode = tier.mode;
+      printAbove(
+        `${ANSI.green(`权限档位已切换为 ${tier.key}（${permissionModeShort(tier.mode)}）。`)}${ANSI.dim('仅本次会话；启动默认用 --HuangAura / --WenNova 或配置 permissionMode')}\n`,
+      );
+      return;
+    }
+    printAbove(`${ANSI.yellow(`用法: ${invokedAs} [strict|HuangAura|WenNova] | ${invokedAs} mode <m> | ${invokedAs} allow|deny <tool>`)}\n`);
   }
 
   function cmdStatus(): void {
@@ -1111,6 +1184,8 @@ export async function runTui(opts: TuiOptions): Promise<number> {
 
   function resizeHandler(): void {
     chromeDrawn = false;
+    lastFrame = null; // 宽度变化会重排既有行，必须全量重画
+    frameInset = 0;
     redraw();
   }
   output.on('resize', resizeHandler);

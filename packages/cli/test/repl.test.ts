@@ -86,6 +86,29 @@ describe('interactive REPL (piped smoke, FR-130/137)', () => {
     expect(stdout).toContain('权限模式: acceptEdits');
   }, 90_000);
 
+  it('/permission switches the three-tier level directly (strict/HuangAura/WenNova)', () => {
+    const { stdout } = runRepl([
+      '/permission',
+      '/permission HuangAura',
+      '/permission',
+      '/permission WenNova',
+      '/permission strict',
+      '/permission 不存在',
+      '/exit',
+    ]);
+    // 无参数：档位速查面板（含三档）
+    expect(stdout).toContain('权限档位（/permission <档位> 直接切换');
+    expect(stdout).toContain('strict');
+    expect(stdout).toContain('WenNova');
+    // 直接切换三档
+    expect(stdout).toContain('权限档位已切换为 HuangAura（部分权限：读免确认）');
+    expect(stdout).toContain('权限模式: default');
+    expect(stdout).toContain('权限档位已切换为 WenNova（完全权限：免确认）');
+    expect(stdout).toContain('权限档位已切换为 strict（严格档：均需确认）');
+    // 非法参数给出用法
+    expect(stdout).toContain('用法: /permission [strict|HuangAura|WenNova]');
+  }, 90_000);
+
   it('!command runs read-only shell through the gate; dangerous is refused', () => {
     const { stdout } = runRepl(['!echo liwen-shell-ok', '!rm -rf /', '/exit'], { argv: ['--HuangAura'] });
     expect(stdout).toContain('liwen-shell-ok');

@@ -21,7 +21,7 @@ import { createBuiltinTools } from '@liwencode/tools';
 import type { CliArgs } from './args.js';
 import { resolvePermissionTier } from './args.js';
 import { buildProvider, type ProviderSpec } from './provider-select.js';
-import { helpText, parseSlash } from './slash.js';
+import { helpText, parsePermissionArg, parseSlash, permissionModeShort, permissionTierPanel } from './slash.js';
 import {
   catalogEntry,
   envFilePath,
@@ -281,8 +281,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case '/model':
         await cmdModel(cmd.args);
         return;
+      case '/permission':
       case '/permissions':
-        cmdPermissions(cmd.args);
+        cmdPermissions(cmd.args, cmd.name);
         return;
       case '/status':
         cmdStatus();
@@ -432,7 +433,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     output.write(ANSI.green(`配置完成，已切换到 ${entry.id}:${model}。\n`));
   }
 
-  function cmdPermissions(args: string[]): void {
+  function cmdPermissions(args: string[], invokedAs = '/permissions'): void {
     if (args.length === 0) {
       const rules = sessionRules.length > 0
         ? sessionRules.map((r) => `  ${r.effect.padEnd(5)} ${r.tool}${r.match?.command !== undefined ? `  cmd=${r.match.command}` : ''}${r.match?.path !== undefined ? `  path=${r.match.path}` : ''}`).join('\n')
@@ -440,9 +441,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       output.write(
         [
           `权限模式: ${ANSI.bold(agent.engine.mode)}（当前档位: ${tierLabelOf(agent.engine.mode)}）`,
-          '临时规则:',
+          ...permissionTierPanel(agent.engine.mode),
+          '本会话临时规则:',
           rules,
-          '调整: /permissions mode <mode> | /permissions allow <tool|pattern> | /permissions deny <tool|pattern>',
+          `调整: ${invokedAs} <档位> | ${invokedAs} mode <m> | ${invokedAs} allow|deny <tool>`,
         ].join('\n') + '\n',
       );
       return;
@@ -465,7 +467,18 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       output.write(ANSI.green(`已添加 ${args[0]} 规则: ${args[1]}（仅本次会话）。\n`));
       return;
     }
-    output.write(ANSI.yellow('用法: /permissions [mode <m> | allow <tool> | deny <tool>]\n'));
+    // 直接切换档位：/permission strict | HuangAura | WenNova（大小写/连字符不敏感）
+    const tier = parsePermissionArg(args[0]!);
+    if (tier !== null) {
+      agent.engine.setMode(tier.mode);
+      permissionMode = tier.mode;
+      output.write(
+        ANSI.green(`权限档位已切换为 ${tier.key}（${permissionModeShort(tier.mode)}）。`) +
+          ANSI.dim('仅本次会话；启动默认用 --HuangAura / --WenNova 或配置 permissionMode\n'),
+      );
+      return;
+    }
+    output.write(ANSI.yellow(`用法: ${invokedAs} [strict|HuangAura|WenNova] | ${invokedAs} mode <m> | ${invokedAs} allow|deny <tool>\n`));
   }
 
   function cmdStatus(): void {

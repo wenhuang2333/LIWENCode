@@ -1,29 +1,33 @@
 import { describe, expect, it } from 'vitest';
-import { COMMAND_HINTS, PALETTE_MAX, exactIndex, suggestCommands } from '../src/tui/palette';
+import { COMMAND_HINTS, exactIndex, paletteWindow, suggestCommands } from '../src/tui/palette';
 import { LineEditor } from '../src/tui/editor';
 
 describe('tui/palette 指令联想', () => {
-  it('提示表：全部以 / 开头、名字唯一、英文描述非空', () => {
+  it('提示表：全部以 / 开头、名字唯一、英文 desc 非空、中文 brief 非空', () => {
     const names = COMMAND_HINTS.map((h) => h.name);
     expect(new Set(names).size).toBe(names.length);
     for (const h of COMMAND_HINTS) {
       expect(h.name.startsWith('/')).toBe(true);
       expect(h.desc.length).toBeGreaterThan(5);
-      expect(h.desc.match(/[\u4e00-\u9fff]/)).toBeNull(); // 英文
+      expect(h.desc.match(/[\u4e00-\u9fff]/)).toBeNull(); // desc 保持英文
+      expect(h.brief.match(/[\u4e00-\u9fff]/)).not.toBeNull(); // brief 为中文简短介绍
     }
   });
 
-  it('前缀过滤："#" 不触发、"/" 全量（截断到上限）、空格后不触发', () => {
+  it('前缀过滤："/" 返回全部命令（不截断）、非 / 开头或带空格不触发', () => {
     expect(suggestCommands('hello')).toEqual([]);
     expect(suggestCommands('')).toEqual([]);
     expect(suggestCommands('/model use deepseek')).toEqual([]); // 已带参数
     const all = suggestCommands('/');
-    expect(all.length).toBe(PALETTE_MAX);
+    expect(all.length).toBe(COMMAND_HINTS.length); // 全量，不再截断为固定条数
     expect(all[0]!.name).toBe('/help');
+    expect(all.map((h) => h.name)).toContain('/permission');
+    expect(all.map((h) => h.name)).toContain('/permissions');
   });
 
-  it('前缀过滤：/m → /model+/manage+/mcp；大小写不敏感；新命令在表中', () => {
+  it('前缀过滤：/m、/p 命中新命令；大小写不敏感', () => {
     expect(suggestCommands('/m').map((h) => h.name)).toEqual(['/model', '/manage', '/mcp']);
+    expect(suggestCommands('/p').map((h) => h.name)).toEqual(['/permission', '/permissions']);
     expect(suggestCommands('/MO').map((h) => h.name)).toEqual(['/model']);
     expect(suggestCommands('/c').map((h) => h.name)).toEqual(['/cost', '/compact', '/clear']);
     expect(suggestCommands('/s').map((h) => h.name)).toEqual(['/status', '/setup']);
@@ -33,6 +37,42 @@ describe('tui/palette 指令联想', () => {
     const hints = suggestCommands('/mo');
     expect(exactIndex(hints, '/model')).toBe(0);
     expect(exactIndex(hints, '/mo')).toBe(-1);
+  });
+});
+
+describe('tui/palette 视窗滚动（列表长于视窗时）', () => {
+  it('列表不超视窗：全量显示', () => {
+    expect(paletteWindow(5, 0, 10)).toEqual({ start: 0, end: 5 });
+    expect(paletteWindow(10, 3, 10)).toEqual({ start: 0, end: 10 });
+  });
+
+  it('顶部/中部/底部：窗口滑动且选中项始终可见', () => {
+    expect(paletteWindow(18, 0, 8)).toEqual({ start: 0, end: 8 });
+    const mid = paletteWindow(18, 9, 8);
+    expect(mid.end - mid.start).toBe(8);
+    expect(mid.start).toBeLessThanOrEqual(9);
+    expect(mid.end).toBeGreaterThan(9);
+    expect(paletteWindow(18, 17, 8)).toEqual({ start: 10, end: 18 });
+  });
+
+  it('可一路向下选取：任意选中位置都在视窗内，直到最后一条', () => {
+    for (let sel = 0; sel < 18; sel++) {
+      const { start, end } = paletteWindow(18, sel, 8);
+      expect(sel).toBeGreaterThanOrEqual(start);
+      expect(sel).toBeLessThan(end);
+      expect(end - start).toBe(8);
+    }
+  });
+
+  it('偶数/奇数视窗尺寸均不越界', () => {
+    for (const size of [4, 5, 7, 8, 9]) {
+      const { start, end } = paletteWindow(18, 0, size);
+      expect(start).toBe(0);
+      expect(end).toBe(size);
+      const last = paletteWindow(18, 17, size);
+      expect(last.end).toBe(18);
+      expect(last.start).toBe(18 - size);
+    }
   });
 });
 

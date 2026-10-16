@@ -63,7 +63,7 @@ Usage:
   liwen --version | --help
 
 交互模式内：
-  /help /model /permissions /status /cost /tools /compact /clear /resume /doctor /exit
+  /help /model /permission /permissions /status /cost /tools /compact /clear /resume /doctor /exit
   @路径          引用文件作为上下文      !命令  执行 shell（经权限审批）
   Ctrl+C        生成中=取消本轮；空闲时按两次=退出
   TTY 终端启动时播放粒子动画（--no-boot 跳过），随后进入常驻 TUI
@@ -74,6 +74,7 @@ Usage:
       --HuangAura                部分权限：读取免确认；写、删、执行仍需确认
       --WenNova                  完全权限：文件增删改查读均免确认（危险命令仍拒绝）
   也可用 --permission-mode <strict|default|acceptEdits|plan|bypass> 精确指定
+  会话内切换：/permission <档位>（如 /permission HuangAura；仅本次会话生效）
 
 Options:
   -p, --print                      非交互执行

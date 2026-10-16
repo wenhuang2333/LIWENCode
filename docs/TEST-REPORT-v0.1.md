@@ -1,18 +1,20 @@
 # LIWENCode v0.1 测试报告
 
-- **版本**：v0.1.0（内部版，对应 WBS M0+M1，未发布；含交互式 CLI 与权限三档增量）
-- **日期**：2026-10-16（权限三档增量更新）
+- **版本**：v0.1.0（内部版，对应 WBS M0+M1，未发布；含交互式 CLI、权限三档与 TUI 渲染稳定性增量）
+- **日期**：2026-10-16（权限三档增量更新；TUI 渲染稳定性与 /permission 增量）
 - **环境**：macOS (darwin 25.5.0, arm64) / Node v24.15.0 / pnpm 12.11.2 / TypeScript 5.7 / Vitest 3.2
-- **结论**：✅ 全部通过 —— typecheck 0 错误、**132/132** 单元与合约测试（含 13 项管道式 REPL 冒烟）、10/10 评测任务。测试过程累计发现并修复 12 项缺陷（§4）。
+- **结论**：✅ 全部通过 —— typecheck 0 错误、**211/211** 单元与合约测试（含 13 项管道式 REPL 冒烟）、10/10 评测任务。测试过程累计发现并修复 25 项缺陷（§4）。
 
 > 增量（权限三档）：新增 `strict` 权限模式（core 引擎一级模式：一切操作含读取都需确认）；CLI 新增 `--HuangAura`（读取免确认，写/删/执行需确认）与 `--WenNova`（文件增删改查读全免确认）档位参数，二者互斥；无参数启动默认严格档；优先级 `--permission-mode > 档位 > 用户配置 > strict`；REPL 横幅与 `/permissions` 显示当前档位。修复 macOS realpath（/var vs /private/var）导致临时目录工作区被判越界的缺陷。
+
+> 增量（渲染稳定性 + `/permission`）：新增 `/permission` 指令（三档直接切换，`/permissions` 与之参数互通）；指令联想改为**全量列表 + 行内中文简介 + 视窗滚动**；TUI chrome 改为**逐行差分渲染 + synchronized update**，实测消除移动选择与空闲时的终端闪烁（§8）。修复光标定位 off-by-one（落在框底边框而非输入行，经 pyte 交叉验证，§4 #25）。
 
 ## 1. 测试范围与结果总览
 
 | 验证项 | 结果 | 数量 |
 | --- | --- | --- |
 | TypeScript 严格检查（`strict` + `exactOptionalPropertyTypes` + `noUncheckedIndexedAccess`） | ✅ 0 错误 | 5 包 |
-| 单元/合约测试（vitest） | ✅ 全部通过 | **199 通过 / 0 失败**（core 59、providers 19、tools 18、testing 9、cli 94） |
+| 单元/合约测试（vitest） | ✅ 全部通过 | **211 通过 / 0 失败**（core 59、providers 19、tools 18、testing 9、cli 106） |
 | 评测集（G1 种子，确定性 MockProvider 驱动真实内核） | ✅ 全部通过 | **10/10** |
 | 错误码注册表治理检查 | ✅ 通过 | 79 码、zh-CN 齐全、可重试 14、fatal 3、DEC-007 空缺保持 |
 | CLI 冒烟（真实进程） | ✅ 通过 | 交互式 + 非交互共 13 项；TUI pty 冒烟 2 项 |
@@ -77,7 +79,7 @@ MockProvider 请求记录与脚本耗尽语义（LW-PRV-007）；MemoryRuntime �
 
 `--version` ✓；`doctor`（12 项检查，无密钥环境正常，不泄露值）✓；`-p` mock text 输出 exit=0 ✓；`--output-format stream-json` 每行含 schemaVersion/sessionId/ts ✓；`--output-format json` 输出版本化结果对象 ✓；非法参数 exit=2 ✓；**真实工作区端到端**（read 工具读真实文件 → mock 汇报 → exit=0）✓。
 
-## 4. 测试驱动的修复与优化（23 项）
+## 4. 测试驱动的修复与优化（25 项）
 
 | # | 发现 | 修复 |
 | --- | --- | --- |
@@ -103,7 +105,9 @@ MockProvider 请求记录与脚本耗尽语义（LW-PRV-007）；MemoryRuntime �
 | 20 | **等宽断言发现**：欢迎面板内容行分隔符实际占 7 列而公式按 8 列算，行宽 87≠88 | `leftW+rightW = panelW−7` 修正 |
 | 21 | **pty 全序列冒烟发现的严重 bug**：`/setup` 各步永远报"必填为空"卡在第 1 步——`feed()` 同步处理 Enter 时已清空缓冲区，事件循环里再读 `editor.text()` 得到空串 | 向导 submit 改用事件携带的 `ev.text`（与主输入路径一致）；Tab 确认路径回退读编辑器 |
 | 22 | 向导脚注行按硬编码 44 列补 padding，实际文本 38 列导致行宽短 6 列 | 统一走 pushRow 宽度计算 |
-| 23 | 向导编辑模式无法"回车沿用现值"（校验先于编辑语义判断） | 编辑模式下文本步空输入跳过必填校验、保留原值 |
+| 23 | 向导编辑模式无法"回车沿用现有值"（校验先于编辑语义判断） | 编辑模式下文本步空输入跳过必填校验、保留原值 |
+| 24 | **pty 探针发现的闪烁根因**：每次 ↑↓ 移动联想整块 `ESC[J` 擦除 + 全量重画（实测 ~44KB/按键、4–5 次全量擦除）；150ms 状态定时器空闲时也在全量重画（~88KB/1.2s）；根因是「清除下方 → 逐行重写」的整块刷新模式在每次按键都执行 | chrome 改为**逐行差分渲染**：只原位重写变化行（`\r`+行+`ESC[K`），帧收缩时原位清空多余行并保持底部锚定；内容未变时**零写入**；整帧用 synchronized update（DEC 2026）包裹。实测 ~440B/按键、0 次全量擦除、空闲 0 字节 |
+| 25 | **模拟器/pyte 双重验证发现的光标 off-by-one**：光标尾部定位用 `CUD(aboveBox+2)`，实际落在输入框**底边框**行而非输入行（内容行应为锚点+aboveBox+1）；且帧收缩路径未补偿帧偏移，关闭联想后光标会飞到屏幕顶部 | 光标定位修正为 `aboveBox+1+帧偏移`；新增 `frameInset` 跟踪帧相对锚点的行偏移，差分/收缩路径统一补偿 |
 
 ## 5. TUI 专项（v0.1 追加，36 项单测 + pty 冒烟）
 
@@ -140,7 +144,7 @@ macOS `script` 分配 pty 驱动真实 TUI：逐字输入实时回显且光标 E
 
 半块渲染（▀ 上/▄ 下，垂直分辨率 ×2）；粒子系统 tick(tMs) 纯时间驱动（确定性可测）；ESC7/ESC8 + 清除下方实现底部锚定 chrome、流式输出零整屏刷新；raw 模式输入统一走 LineEditor 状态机；权限审批/配置向导复用同一输入框（问题显示于框标题）。
 
-## 6. 欢迎面板与指令联想（v0.1 追加，14 项单测 + pty 冒烟）
+## 6. 欢迎面板与指令联想（v0.1 追加，18 项单测 + pty 冒烟）
 
 ### 6.1 欢迎面板 `tui/welcome.ts`（6 项）
 
@@ -150,10 +154,11 @@ macOS `script` 分配 pty 驱动真实 TUI：逐字输入实时回显且光标 E
 - renderPanel：行数=panelH、首尾行圆角边框、去 ANSI 后每行等宽、含 "Welcome to LIWENCode" 与模型/提示、右侧文本无 CJK（全英文）、两时刻帧不同（动画驱动）。
 - 终端 <64 列或 <20 行返回空（调用方回退旧横幅）。
 
-### 6.2 指令联想 `tui/palette.ts` + 编辑器 nav（8 项）
+### 6.2 指令联想 `tui/palette.ts` + 编辑器 nav（12 项）
 
-- 提示表 15 条全部 `/` 开头、名字唯一、英文描述无 CJK。
-- 前缀过滤：非 `/` 开头 / 空行 / 已带参数（含空格）不触发；`/` 全量截断到 6；`/m` → /model+/mcp；`/c` → /cost+/compact+/clear；大小写不敏感；exactIndex 完整命令名命中。
+- 提示表 18 条全部 `/` 开头、名字唯一、英文 desc 无 CJK、**中文 brief 非空**（行内简短介绍）。
+- 前缀过滤：非 `/` 开头 / 空行 / 已带参数（含空格）不触发；**`/` 返回全部 18 条（不截断）**；`/m` → /model+/manage+/mcp；`/p` → /permission+/permissions；`/c` → /cost+/compact+/clear；`/s` → /status+/setup；大小写不敏感；exactIndex 完整命令名命中。
+- **视窗滚动 `paletteWindow`（4 项）**：列表不超视窗时全量显示；顶部/中部/底部窗口滑动且选中项始终可见；任意选中位置（0..N−1）都落在视窗内直至最后一条；偶数/奇数视窗尺寸均不越界。
 - 编辑器：navCapture 关闭时 ↑↓ 浏览历史、开启时产生 nav 事件不改内容；独立 Esc 与 Tab 事件（Tab 不再自动插空格，由 TUI 按联想状态决定）；setLine 整行替换并复位历史浏览。
 
 ### 6.3 pty 冒烟（sized pty，`stty cols 100 rows 40`）
@@ -186,19 +191,37 @@ openai-compatible 新增 authStyle：x-api-key 头与 ?key= 查询参数按配�
 
 欢迎面板新增 frozen 参数：任意键后蝴蝶取固定姿态（t=0 全开），不同时刻渲染逐字节一致（单测断言）；pty 冒烟中确认冻结后无动画帧差异。
 
-## 8. 已知限制（v0.1 范围外，按 WBS 顺延）
+## 8. 渲染稳定性与 `/permission` 指令（v0.1 追加，12 项单测 + 双探针验证）
+
+### 8.1 `/permission`（三档快捷切换，7 项单测 + 1 项 REPL 冒烟 + 1 项 TUI 探针）
+
+- 档位解析 `parsePermissionArg`：三档名正映射（strict→strict / HuangAura→default / WenNova→bypass）；大小写与连字符/下划线不敏感（`huang-aura`、`wen_nova`）；`default`/`bypass` 模式别名；`acceptEdits`/`plan` 高级模式；无法识别返回 null（`mode`/`allow`/`deny` 保留给子命令）。
+- 展示文本：`permissionModeShort` 覆盖全部模式；`permissionTierPanel` 列出三档并以 `●` 标记当前档位（含 plan/acceptEdits 当前态）。
+- 集成（REPL 管道冒烟）：`/permission` 展示速查表；`/permission HuangAura|WenNova|strict` 三档直接切换且消息含档位说明；非法参数给出用法。
+- TUI 路径（PTY 探针）：输入 `/perm` → Tab 补全 `/permission ` → 输入 `HuangAura` 回车 → 输出区出现切换消息、输入框标题档位更新为「部分权限：读免确认」。
+- `/permissions` 与 `/permission` 参数互通（`mode/allow/deny` 子命令与档位参数在同一处理器内解析）。
+
+### 8.2 chrome 帧差分渲染（闪烁消除，PTY 字节级 + 屏幕级双探针）
+
+- **根因**（探针实测）：每次 ↑↓ 移动都整块 `ESC[J` 擦除 + 全量重画（~44KB/按键、4–5 次擦除）；150ms 状态定时器空闲时同样全量重画（~88KB/1.2s）。
+- **修复**：`buildChromeFrame` 组帧 + `paintChromeFrame` 三路径——同高/收缩帧逐行差分原位重写（收缩帧保持底部锚定、原位清空多余行）；增高帧/失效帧全量；内容未变**零写入**；整帧 synchronized update（DEC 2026）包裹，支持它的终端原子提交。
+- **字节级探针**（24 行 PTY，逐按键统计）：移动 ~440B/按键、窗口滚动步 ~2KB、`ESC[J` 恒为 0；Esc 关闭 193B/0 次擦除；空闲 1.2s **0 字节**；联想首屏 14 条 + 标题 `1-14/18`，↓×10 滚动到 `5-18/18`，底部可见 `/agents /goal /mcp /rewind`。
+- **屏幕级探针**（自研最小 VT100 模拟器 + pyte 交叉验证）：启动面板/输入框/状态栏自顶排布；联想层紧贴输入框上方、反显选中行 = /help、行内中文简介随命令显示；Esc 后无残留且输入框保持原区域底部；输入 `abc` 后光标落于输入行文本末尾（修正 off-by-one）；`/permission` 全链路可见。
+- 附带修复：打开联想时自动收起欢迎面板（避免弹层与 22 行面板叠加超出屏幕）。
+
+## 9. 已知限制（v0.1 范围外，按 WBS 顺延）
 
 - 真实模型 Provider 仅经本地 SSE mock 验证合约（G2 的"真实密钥联调"待 M1 收尾/用户提供密钥后补充 DeepSeek 实测）。
 - TUI、会话恢复 CLI、自动压缩、MCP、决策层、三角色编排未实现（M2~M4 范围）。
 - 评测集为 10 项种子，G1 要求的 30 项任务集在 M1 后续扩充。
 - CI 工作流已就绪（.github/workflows/ci.yml，ubuntu/macos × Node 22），推送后首跑验证。
 
-## 9. 复现命令
+## 10. 复现命令
 
 ```bash
 corepack pnpm install
 corepack pnpm typecheck      # 0 errors
-corepack pnpm test           # 199 passed
+corepack pnpm test           # 211 passed
 corepack pnpm lint:registry  # 78 codes OK
 corepack pnpm test:evals     # 10/10
 

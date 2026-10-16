@@ -33,7 +33,7 @@
 - 三档互斥：`--WenNova --HuangAura` 同用报 `LW-CLI-001`
 - 优先级：`--permission-mode` > 档位参数 > 用户配置（`~/.liwencode/config.json` 的 `permissionMode`）> 严格档
 - **安全底线不随档位放宽**：`rm -rf /`、`mkfs`、`git push --force`、格式化磁盘等危险命令在**任何档位（含 --WenNova）都默认拒绝**（BR-006），需要显式 `--allowed-tools` 用户级规则才可放行；`deny` 永远不能被模型提升为 `allow`
-- 档位只是免确认范围的变化；会话内可用 `/permissions mode` 临时调整（如切回 strict）
+- 档位只是免确认范围的变化；**会话内可直接用 `/permission <档位>` 切换**（如 `/permission HuangAura` 升档、`/permission strict` 降档，仅本次会话生效），或用 `/permissions mode <m>` 精确设置
 
 ### 其他参数
 
@@ -75,20 +75,28 @@ TTY 下 `liwen` 进入自研纯 ANSI TUI（零第三方依赖，不依赖 Ink/Re
 
 输入 `/`（命令名未输完、无空格）即在输入框上方弹出联想层：
 
-- 列表按前缀实时过滤（最多 6 条），每行显示命令名与参数占位
-- `↑/↓` 循环选择（选中行反显高亮），分隔线下显示**选中命令的英文详细说明**与键位提示
+- **列出全部匹配命令**（输入单独的 `/` 即全部 18 条，不再截断），每行显示命令名与**中文简短介绍**
+- `↑/↓` 循环选择（选中行反显高亮）：列表长于视窗时**视窗随选中项自动滚动**，
+  可从第一条一路 ↓ 选到最后一条；标题显示 `commands a-b/N` 提示当前位置
+- 分隔线下显示**选中命令的用法**与键位提示
 - `Tab` / `Enter` 补全选中命令到输入行（自动带尾随空格等待参数）；输入恰为完整命令名时 `Enter` 直接执行
-- `Esc` 关闭联想；继续输入即实时过滤
+- `Esc` 关闭联想；继续输入即实时过滤；打开联想时欢迎面板自动收起（为其让出空间）
+- 渲染为**逐行差分更新**（仅原位重写变化行 + synchronized update 原子提交），
+  移动选择零闪烁、空闲零重绘（150ms 状态定时器只在数值变化时改写状态行）
 
 ### 常驻界面布局
 
 ```
   （流式输出区：回复文本、工具调用 ⚙/✔/✖ 行，自然向上滚动）
-╭─ commands ───────────────────────────╮
-│ ❯ /model      [list|use|config]      │   ← 指令联想层（输入 / 时）
+╭─ commands 1-14/18 ───────────────────╮
+│   /help        显示全部命令与用法      │   ← 指令联想层（输入 / 时，
+│   /model       查看/切换/配置模型      │      全量列表 + 中文简介，
+│ ❯ /permission  修改权限档位（三档）    │      长列表视窗滚动）
+│   /permissions 权限模式与临时规则      │
+│   …                                   │
 ├──────────────────────────────────────┤
-│ Show, switch or configure the …      │
-│ ↑↓ select · Tab/Enter complete · Esc close │
+│ 用法: /permission [tier]              │
+│ ↑↓ 选择 · Tab/Enter 补全 · Esc 关闭    │
 ╰──────────────────────────────────────╯
 ┌─ liwen (deepseek:deepseek-chat) · 部分权限：读免确认 ──────┐
 │ ❯ 输入内容（CJK 宽度感知，超宽横向滚动，↑↓ 历史）      ▮
@@ -98,7 +106,7 @@ TTY 下 `liwen` 进入自研纯 ANSI TUI（零第三方依赖，不依赖 Ink/Re
 
 - **输入框**：边框标题实时显示 `provider:model`、当前权限档位、处理中/排队状态；权限审批与 `/model config` 向导的问题也显示在框标题，答案在同一输入框键入
 - **状态栏字段**（窄终端下自动从右丢弃）：当前模型 / 上下文已用（含窗口占比）/ 第几轮:第几步 / 实时 token 输出速度（流式期间实时更新，结束后保留末次值）/ 缓存命中率（provider 未上报缓存时显示 —）/ 总消耗 token
-- 流式输出通过 `ESC7/ESC8` 光标保存恢复 + 清除下方重绘实现：欢迎面板、联想层、输入框与状态栏始终锚定底部，回复在其上方追加，无整屏刷新
+- **chrome 渲染（防闪烁）**：欢迎面板/联想层/输入框/状态栏组成一帧，基于 ESC7/ESC8 光标保存恢复做**逐行差分更新**——只原位重写变化行，帧收缩时原位清空多余行并保持底部锚定，内容未变时零写入；整帧写入用 synchronized update（DEC 2026）包裹，支持它的终端原子提交。回复文本在其上方追加（先撤下 chrome、写完再重画）
 - 轮次 = 本次会话用户发起的第 N 轮；步数 = 累计工具执行次数
 
 ### 键位
@@ -108,7 +116,7 @@ TTY 下 `liwen` 进入自研纯 ANSI TUI（零第三方依赖，不依赖 Ink/Re
 | 可打印字符 / 中文 | 插入输入框（CJK 按码点处理，删除不切半个字） |
 | `Enter` | 联想激活时 = 补全选中项（完整命令名则直接执行）；否则提交（生成中提交则排队） |
 | `←/→/Home/End` | 光标移动（列宽感知）；`Backspace/Delete` 删除 |
-| `↑/↓` | 联想激活时 = 选择候选；否则浏览输入历史（浏览中保留草稿） |
+| `↑/↓` | 联想激活时 = 选择候选（列表长于视窗时视窗自动滚动，可一路选到底）；否则浏览输入历史（浏览中保留草稿） |
 | `Tab` | 联想激活时 = 补全选中项；否则插入两个空格 |
 | `Esc` | 关闭指令联想 |
 | `Ctrl+A/E/U/K` | 行首/行尾/清行/删至行尾 |
@@ -144,6 +152,7 @@ TTY 下 `liwen` 进入自研纯 ANSI TUI（零第三方依赖，不依赖 Ink/Re
 | 命令 | 说明 |
 | --- | --- |
 | `/help [命令]` | 全部命令一览，或单条详细用法 |
+| `/permission` | 权限档位速查与切换（三档快捷命令，见「权限管理」节） |
 | `/status` | 会话 ID、当前模型、权限模式、轮次、上下文 token 占用百分比 |
 | `/cost` | 累计请求次数、输入/输出 token、费用（provider 提供定价时） |
 | `/tools` | 已注册工具及风险级别（read/write/exec）、是否只读、并发安全 |
@@ -198,12 +207,27 @@ TTY 下 `liwen` 进入自研纯 ANSI TUI（零第三方依赖，不依赖 Ink/Re
 | `openai-compatible` | `gpt-4o` / `gpt-4o-mini` | `OPENAI_API_KEY` | OpenAI 及任何兼容端点（可用 `OPENAI_BASE_URL` 覆盖） |
 | `anthropic` | `claude-sonnet-4` / `claude-haiku-4` | `ANTHROPIC_API_KEY` | 原生 Messages 协议 |
 
-### 权限管理：`/permissions`
+### 权限管理：`/permission` 与 `/permissions`
+
+**`/permission`（档位快捷切换，推荐）**——对应启动时的三个档位，会话内直接升降档：
 
 | 用法 | 说明 |
 | --- | --- |
-| `/permissions` | 当前模式（含档位说明）+ 本会话临时规则列表 |
-| `/permissions mode <m>` | 切换 `strict`/`default`/`acceptEdits`/`plan`/`bypass`（等价于临时升降档） |
+| `/permission` | 显示当前模式/档位 + 三档速查表（`●` 标记当前档位）+ 本会话临时规则 |
+| `/permission strict` | 切回**严格档**：一切操作（含读取）都需确认 |
+| `/permission HuangAura` | **部分权限**：读取免确认；写、删、执行需确认 |
+| `/permission WenNova` | **完全权限**：文件增删改查读全部免确认（危险命令仍拒绝） |
+
+档位名大小写与连字符不敏感（`huang-aura`、`wennova` 均可），`default`/`bypass` 作为模式别名同样接受，
+高级模式 `acceptEdits`/`plan` 也可直接作为参数。**切换仅本次会话生效**——启动默认仍由命令行档位参数
+或配置 `permissionMode` 决定；切换后输入框标题的档位标识即时更新。
+
+**`/permissions`（进阶，两个命令名参数完全互通）**：
+
+| 用法 | 说明 |
+| --- | --- |
+| `/permissions` | 同 `/permission`（模式 + 档位速查表 + 临时规则列表） |
+| `/permissions mode <m>` | 精确切换 `strict`/`default`/`acceptEdits`/`plan`/`bypass` |
 | `/permissions allow <tool>` | 添加会话级放行规则（如 `/permissions allow write`、`/permissions allow mcp__github__*`） |
 | `/permissions deny <tool>` | 添加会话级拒绝规则 |
 

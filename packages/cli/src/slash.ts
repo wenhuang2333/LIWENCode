@@ -1,7 +1,9 @@
 /**
  * Slash-command parsing and metadata (FR-137). Pure logic — unit-testable
- * without a terminal. Handlers live in interactive.ts.
+ * without a terminal. Handlers live in interactive.ts (REPL) and tui/tui.ts.
  */
+
+import type { PermissionMode } from '@liwencode/core';
 
 export interface SlashCommand {
   name: string;
@@ -20,6 +22,7 @@ export interface CommandDoc {
 export const COMMAND_DOCS: readonly CommandDoc[] = [
   { name: '/help', usage: '/help [命令]', summary: '显示全部命令或某命令的详细用法', since: 'v0.1' },
   { name: '/model', usage: '/model [list|use|config|show]', summary: '查看/切换/配置模型与 Provider', since: 'v0.1' },
+  { name: '/permission', usage: '/permission [strict|HuangAura|WenNova]', summary: '查看或切换权限档位（三档，仅本次会话生效）', since: 'v0.1' },
   { name: '/permissions', usage: '/permissions [mode <m>|allow <tool>|deny <tool>]', summary: '查看或调整权限模式与临时规则', since: 'v0.1' },
   { name: '/status', usage: '/status', summary: '会话状态：模型、轮次、上下文占用、事件统计', since: 'v0.1' },
   { name: '/cost', usage: '/cost', summary: 'Token 用量与费用汇总', since: 'v0.1' },
@@ -36,6 +39,75 @@ export const COMMAND_DOCS: readonly CommandDoc[] = [
   { name: '/goal', usage: '/goal', summary: '目标与确定性验收', since: 'M3+' },
   { name: '/rewind', usage: '/rewind', summary: '回滚到检查点', since: 'M2+' },
 ];
+
+// ── 权限档位（三档）────────────────────────────────────────────────────
+// 与 CLI 参数一一对应：无参数=strict（严格档）/ --HuangAura=default（部分权限）
+// / --WenNova=bypass（完全权限）。/permission 指令在会话内直接切换档位。
+
+export interface PermissionTierDef {
+  /** 档位名（/permission 指令与命令行参数使用的名字） */
+  key: string;
+  /** 引擎权限模式 */
+  mode: PermissionMode;
+  /** 中文短标签 */
+  label: string;
+  /** 一句话说明 */
+  desc: string;
+}
+
+export const PERMISSION_TIERS: readonly PermissionTierDef[] = [
+  { key: 'strict', mode: 'strict', label: '严格档', desc: '一切操作（含读取）都需确认' },
+  { key: 'HuangAura', mode: 'default', label: '部分权限', desc: '读取免确认；写、删、执行需确认' },
+  { key: 'WenNova', mode: 'bypass', label: '完全权限', desc: '文件增删改查读全部免确认（危险命令仍拒绝）' },
+];
+
+/**
+ * 解析 /permission 的参数：接受档位名（strict / HuangAura / WenNova，大小写与
+ * 连字符不敏感）、高级模式名（acceptEdits / plan）以及模式别名（default / bypass）。
+ * 无法识别返回 null。
+ */
+export function parsePermissionArg(raw: string): { key: string; mode: PermissionMode } | null {
+  const a = raw.trim().toLowerCase().replace(/[-_]/g, '');
+  switch (a) {
+    case 'strict':
+      return { key: 'strict', mode: 'strict' };
+    case 'huangaura':
+    case 'default':
+      return { key: 'HuangAura', mode: 'default' };
+    case 'wennova':
+    case 'bypass':
+      return { key: 'WenNova', mode: 'bypass' };
+    case 'acceptedits':
+      return { key: 'acceptEdits', mode: 'acceptEdits' };
+    case 'plan':
+      return { key: 'plan', mode: 'plan' };
+    default:
+      return null;
+  }
+}
+
+/** 当前模式的短标签（TUI 标题栏 / 状态输出共用） */
+export function permissionModeShort(mode: PermissionMode): string {
+  switch (mode) {
+    case 'strict': return '严格档：均需确认';
+    case 'default': return '部分权限：读免确认';
+    case 'acceptEdits': return 'acceptEdits';
+    case 'plan': return 'plan 只读';
+    case 'bypass': return '完全权限：免确认';
+  }
+}
+
+/** 档位速查面板（/permission 无参数时显示；● 标记当前档位） */
+export function permissionTierPanel(current: PermissionMode): string[] {
+  const rows = PERMISSION_TIERS.map(
+    (t) => `  ${current === t.mode ? '●' : ' '} ${t.key.padEnd(10)} ${t.label} — ${t.desc}`,
+  );
+  const advanced =
+    current === 'acceptEdits' || current === 'plan'
+      ? [`  ● ${current.padEnd(10)} （高级模式：${permissionModeShort(current)}）`]
+      : ['   （高级模式 acceptEdits / plan 亦可作为档位参数）'];
+  return ['权限档位（/permission <档位> 直接切换，仅本次会话生效）:', ...rows, ...advanced];
+}
 
 export function parseSlash(line: string): SlashCommand | null {
   const trimmed = line.trim();
