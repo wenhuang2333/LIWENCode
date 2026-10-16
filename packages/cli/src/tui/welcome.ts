@@ -102,26 +102,39 @@ export function butterflyPixels(w: number, h: number, tMs: number): Map<number, 
   return px;
 }
 
-/** 黑白阴影艺术字像素：主字亮白 250，右下偏移（+1 列/+2 像素行）阴影深灰 238。
- * 字形纵向 ×2（半块像素为正方形，1:1 映射会把字压扁）；像素高 = 5×2+2 = 12 = 6 终端行 */
+/** 黑白阴影艺术字像素：主字纯白 255，右下偏移 1 列/2 像素行阴影深灰 234。
+ * 字形纵向 ×2（半块像素为正方形）；横向按目标宽度自动整数倍缩放 +
+ * 均匀字距，铺满整个底部宽度。像素高 = 5×2+2 = 12 = 6 终端行 */
 export function artPixels(w: number, text = 'LIWENCode'): Map<number, number> {
-  let { points, width } = miniPoints(text, 1);
-  if (width > w) {
-    const tight = miniPoints(text, 0);
-    points = tight.points;
-    width = tight.width;
-  }
+  const glyphs = [...text].map((ch) => MINI[ch]).filter((g): g is { w: number; rows: string[] } => g !== undefined);
+  if (glyphs.length === 0) return new Map();
+  const baseW = glyphs.reduce((acc, g) => acc + g.w, 0);
+  const gaps = Math.max(1, glyphs.length - 1);
+  const xScale = Math.max(1, Math.min(3, Math.floor((w * 0.92) / baseW)));
+  const scaledW = baseW * xScale;
+  const gap = Math.max(0, Math.floor((w - scaledW) / gaps));
+  const ox = Math.max(0, Math.floor((w - (scaledW + gap * gaps)) / 2));
+  const shadowOff = 1; // 阴影仅露出右下 1 列，避免糊在字底
+
   const px = new Map<number, number>();
-  const ox = Math.max(0, Math.floor((w - width - 1) / 2));
-  for (const p of points) {
-    // 阴影（先行，被主字覆盖处重写）
-    px.set((p.row * 2 + 2) * w + (p.col + ox + 1), 238);
-    px.set((p.row * 2 + 3) * w + (p.col + ox + 1), 238);
-  }
-  for (const p of points) {
-    px.set((p.row * 2) * w + (p.col + ox), 250);
-    px.set((p.row * 2 + 1) * w + (p.col + ox), 250);
-  }
+  let x = ox;
+  glyphs.forEach((g, gi) => {
+    for (let r = 0; r < 5; r++) {
+      const line = g.rows[r]!;
+      for (let c = 0; c < g.w; c++) {
+        if (line[c] !== '1') continue;
+        for (let s = 0; s < xScale; s++) {
+          const col = x + c * xScale + s;
+          // 阴影（先行，被主字覆盖处重写）：深灰 234 与亮白 255 拉开对比
+          px.set((r * 2 + 2) * w + (col + shadowOff), 234);
+          px.set((r * 2 + 3) * w + (col + shadowOff), 234);
+          px.set((r * 2) * w + col, 255);
+          px.set((r * 2 + 1) * w + col, 255);
+        }
+      }
+    }
+    x += g.w * xScale + (gi < glyphs.length - 1 ? gap : 0);
+  });
   return px;
 }
 
@@ -206,24 +219,36 @@ function rightColumn(info: WelcomeInfo): string[] {
 /**
  * 渲染欢迎面板：返回等宽行数组（不含换行）；终端过小返回 []。
  * panelH 由调用方按可用行数给出（12..22）。
+ *
+ * 布局（无中缝分隔线）：
+ *   ┌────────────────────────────────────┐
+ *   │  蝴蝶(左)         Welcome/提示(右)  │   上半区：左右并排，空隙分隔
+ *   │                                    │
+ *   │  L I W E N C o d e（铺满底部宽度） │   底部 6 行：黑白阴影艺术字
+ *   └────────────────────────────────────┘
  */
 export function renderPanel(cols: number, panelH: number, tMs: number, info: WelcomeInfo): string[] {
   const panelW = Math.min(cols - 2, 88);
   if (!welcomeSupported(cols, panelH + 2) || panelH < 12) return [];
   const innerH = panelH - 2;
-  // 内容行结构：│_leftW_│_rightW_│ → 边框2 + 空隙5 = leftW+rightW+7 = panelW
-  const leftW = Math.floor((panelW - 7) / 2);
-  const rightW = panelW - 7 - leftW;
+  // 内容宽度：│_C_│（边框2 + 左右各 1 空隙）
+  const innerW = panelW - 4;
+  // 上半区左右分割（无分隔线，仅空隙）：蝴蝶 leftW + 2 空格 + 右侧文本
+  const leftW = Math.floor(innerW * 0.46);
+  const rightW = innerW - leftW - 2;
+  const rightStart = leftW + 2;
 
-  // 左列：蝴蝶（上半）+ 空行 + 艺术字（底部 6 行）
+  // 底部艺术字 6 行 + 1 空行分隔
   const artH = 6;
-  const butterflyRows = innerH - artH - 1;
-  const butterfly = butterflyPixels(leftW, butterflyRows * 2, tMs);
-  const art = artPixels(leftW);
+  const upperRows = innerH - artH - 1;
+  const butterfly = butterflyPixels(leftW, upperRows * 2, tMs);
+  const art = artPixels(innerW);
 
-  // 右列：垂直居中
+  // 右侧文本在上半区垂直居中；行数不足时先删空行、再从顶部裁剪
   const right = rightColumn(info);
-  const padTop = Math.max(0, Math.floor((innerH - right.length) / 2));
+  while (right.length > upperRows && right.includes('')) right.splice(right.indexOf(''), 1);
+  while (right.length > upperRows && right.length > 1) right.shift();
+  const padTop = Math.max(0, Math.floor((upperRows - right.length) / 2));
   const rightAt = (i: number): string => {
     const line = i >= padTop ? right[i - padTop] : undefined;
     return line ?? '';
@@ -235,14 +260,19 @@ export function renderPanel(cols: number, panelH: number, tMs: number, info: Wel
   const l = Math.floor(fill / 2);
   lines.push(`╭${'─'.repeat(l)}${title}${'─'.repeat(fill - l)}╮`);
   for (let r = 0; r < innerH; r++) {
-    let leftCell: string;
-    if (r < butterflyRows) leftCell = stripOf(butterfly, leftW, r);
-    else if (r === butterflyRows) leftCell = ' '.repeat(leftW);
-    else leftCell = stripOf(art, leftW, r - butterflyRows - 1);
-    // 右列最长行约 40 列；rightW 不足时置空（面板宽度已由 welcomeSupported 兜底）
-    const rt = plainLen(rightAt(r)) > rightW ? '' : rightAt(r);
-    const pad = rightW - plainLen(rt);
-    lines.push(`│ ${leftCell} │ ${rt}${' '.repeat(Math.max(0, pad))} │`);
+    if (r < upperRows) {
+      const bf = stripOf(butterfly, leftW, r);
+      // 右列最长行约 40 列；rightW 不足时置空（面板宽度已由 welcomeSupported 兜底）
+      const rt = plainLen(rightAt(r)) > rightW ? '' : rightAt(r);
+      const pad = rightW - plainLen(rt);
+      // bf(leftW 可见列) + 2 空格 + rt+pad(rightW) = innerW，无中缝分隔线
+      lines.push(`│ ${bf}  ${rt}${' '.repeat(Math.max(0, pad))} │`);
+    } else if (r === upperRows) {
+      lines.push(`│ ${' '.repeat(innerW)} │`);
+    } else {
+      const artRow = stripOf(art, innerW, r - upperRows - 1);
+      lines.push(`│ ${artRow} │`);
+    }
   }
   lines.push(`╰${'─'.repeat(panelW - 2)}╯`);
   return lines;

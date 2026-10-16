@@ -35,12 +35,23 @@ describe('tui/welcome 欢迎面板', () => {
     expect(width).toBe(32);
   });
 
-  it('artPixels：黑白阴影（主字亮白 + 深灰阴影）', () => {
-    const px = artPixels(40);
+  it('artPixels：黑白阴影（纯白主字 + 深灰阴影）且横向铺满宽度', () => {
+    const W = 80;
+    const px = artPixels(W);
     const colors = new Set(px.values());
-    expect(colors.has(250)).toBe(true); // 主字
-    expect(colors.has(238)).toBe(true); // 阴影
+    expect(colors.has(255)).toBe(true); // 主字
+    expect(colors.has(234)).toBe(true); // 阴影
     expect(colors.size).toBe(2); // 纯黑白灰，无彩色
+    // 铺满：最左 6 列与最右 6 列内均有像素
+    let minCol = W;
+    let maxCol = 0;
+    for (const key of px.keys()) {
+      const c = key % W;
+      if (c < minCol) minCol = c;
+      if (c > maxCol) maxCol = c;
+    }
+    expect(minCol).toBeLessThanOrEqual(6);
+    expect(maxCol).toBeGreaterThanOrEqual(W - 7);
   });
 
   it('butterflyPixels：多彩（≥3 种彩虹色）且持续扇翅', () => {
@@ -74,6 +85,18 @@ describe('tui/welcome 欢迎面板', () => {
     expect(joined).toContain('Type / for command palette');
     // 全英文：无 CJK 字符（右侧文本区）
     expect(joined.match(/[\u4e00-\u9fff]/)).toBeNull();
+    // 无中缝：内容行的首尾 │ 之外不再出现竖线
+    for (let i = 1; i < plain.length - 1; i++) {
+      const row = plain[i]!;
+      expect(row.slice(1, -1).includes('│')).toBe(false);
+    }
+    // 艺术字铺满底部：底部 6 个内容行的左右两端 8 列内均有像素
+    const artRows = plain.slice(plain.length - 7, plain.length - 1);
+    expect(artRows.length).toBe(6);
+    for (const row of artRows) {
+      expect(row.slice(1, 9).match(/[▀▄]/)).not.toBeNull();
+      expect(row.slice(-9, -1).match(/[▀▄]/)).not.toBeNull();
+    }
   });
 
   it('renderPanel：蝴蝶动画驱动帧变化', () => {
