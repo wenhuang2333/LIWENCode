@@ -1,3 +1,5 @@
+import { displayWidth } from './width.js';
+
 /**
  * 欢迎面板（Welcome Panel）：进入正式工作区时的初始区域（仿 Claude Code /
  * MiMo 的欢迎框，但布局自定）。
@@ -286,7 +288,7 @@ export function renderPanel(
   return lines;
 }
 
-/** 右列仅含 ASCII + ANSI 转义：可见长度 = 总长 − 转义序列长 */
+/** 右列可见列宽（ANSI 零宽；CJK 按 2 列，避免动态文本撑破边框对齐） */
 function plainLen(s: string): number {
-  return s.replace(/\x1b\[[0-9;]*m/g, '').length;
+  return displayWidth(s);
 }

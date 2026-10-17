@@ -19,12 +19,14 @@ describe('tui/status 状态指标', () => {
     expect(estimateTokensOfText('abcdefgh')).toBe(2);
   });
 
-  it('轮次/步数计数', () => {
+  it('轮次（累计用户轮次）/步数计数', () => {
     const t = new StatusTracker({ model: 'mock:default', contextWindow: 128_000 });
-    t.onEvent({ type: 'turn.start', turn: 1 }, 0);
+    t.onEvent({ type: 'turn.start', turn: 1 }, 0); // 第 1 轮用户消息
     t.onEvent({ type: 'tool.start', callId: 'c1', name: 'read', input: {} }, 0);
     t.onEvent({ type: 'tool.start', callId: 'c2', name: 'write', input: {} }, 0);
-    t.onEvent({ type: 'turn.start', turn: 2 }, 0);
+    t.onEvent({ type: 'turn.start', turn: 2 }, 0); // 同一轮的第二次循环：轮次不变
+    expect(t.snapshot(0).turn).toBe(1);
+    t.onEvent({ type: 'turn.start', turn: 1 }, 0); // 第 2 轮用户消息
     const snap = t.snapshot(0);
     expect(snap.turn).toBe(2);
     expect(snap.step).toBe(2);
@@ -68,12 +70,12 @@ describe('tui/status 状态指标', () => {
   it('状态行包含全部字段且按宽度截断', () => {
     const t = new StatusTracker({ model: 'deepseek:deepseek-chat', contextWindow: 128_000 });
     t.onEvent(usageEv({ inputTokens: 3200, cacheReadTokens: 6800, outputTokens: 1200 }), 0);
-    t.onEvent({ type: 'turn.start', turn: 3 }, 0);
+    t.onEvent({ type: 'turn.start', turn: 1 }, 0);
     t.onEvent({ type: 'tool.start', callId: 'c', name: 'read', input: {} }, 0);
     const line = formatStatusLine(t.snapshot(0), 200);
     expect(line).toContain('deepseek:deepseek-chat');
     expect(line).toContain('上下文');
-    expect(line).toContain('轮次 3:1');
+    expect(line).toContain('轮次 1:1');
     expect(line).toContain('缓存');
     expect(line).toContain('总token');
 

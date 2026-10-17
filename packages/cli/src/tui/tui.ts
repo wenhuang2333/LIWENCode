@@ -130,8 +130,6 @@ const ANSI = {
   magenta: (s: string) => `\x1b[35m${s}\x1b[39m`,
 };
 
-const SAVE = '\x1b7';
-const RESTORE = '\x1b8';
 const CLEAR_BELOW = '\x1b[J';
 const ERASE_EOL = '\x1b[K';
 const CUD1 = '\x1b[1B';
@@ -180,7 +178,7 @@ async function playBoot(noBoot: boolean): Promise<void> {
     }
   } finally {
     input.off('data', onKey);
-    output.write(RESTORE + CLEAR_BELOW + SHOW_CURSOR);
+    output.write('\x1b[H' + CLEAR_BELOW + SHOW_CURSOR);
   }
 }
 
@@ -220,12 +218,20 @@ export async function runTui(opts: TuiOptions): Promise<number> {
 
   // ── chrome（输入框 + 状态栏）状态 ──
   let chromeDrawn = false;
+  // chrome 锚点不用 ESC7/ESC8（DECSC）：内容滚动后保存位置会失配（终端间行为不一，
+  // 会导致幽灵行/擦错区域）。改为纯相对移动：光标始终停在输入行，靠 CUU 回到帧首。
+  let lastAboveBox = 0;
   /** 上一帧逐行内容（含 ANSI）；用于差分重绘，null = 屏幕内容已失效需全量重画 */
   let lastFrame: string[] | null = null;
   /** 帧首行相对锚点（ESC7 保存位）的行偏移；收缩帧保持底部锚定时 > 0 */
-  let frameInset = 0;
+
   let busy = false;
-  let queuedInput: string | null = null;
+  let busySince: number | null = null;
+  /** 忙碌期间用户提交的消息队列（保序，不覆盖丢弃；上限 16） */
+  const queuedInputs: string[] = [];
+  /** 问答引导进行中：提前到达的 Enter 先入队，避免下一问尚未就绪时输入走失 */
+  let guidedDepth = 0;
+  const queuedAnswers: string[] = [];
   type EditorMode = { kind: 'input' } | { kind: 'permission'; resolve: (a: string) => void } | { kind: 'prompt'; resolve: (a: string) => void };
   let mode: EditorMode = { kind: 'input' };
   let lastSigint = 0;
@@ -289,21 +295,31 @@ export async function runTui(opts: TuiOptions): Promise<number> {
 
   // ── 输出（chrome 感知） ──────────────────────────────────────────────
 
+  /** 从当前光标（输入行）上移到 chrome 帧首并清除整个帧。
+   * 纯相对移动（CUU + ED），不依赖 ESC7/ESC8——滚动后保存位置会失配。 */
+  function eraseChromeSeq(): string {
+    const up = lastAboveBox + 1;
+    return `${up > 0 ? `\x1b[${up}A` : ''}\r${CLEAR_BELOW}`;
+  }
+
+  /** 退出时的收尾文本：撤下 chrome 后打印告别语 */
+  function goodbyeText(): string {
+    const erase = chromeDrawn ? eraseChromeSeq() : '';
+    return `${erase}\r\n${ANSI.dim('再见。')}\r\n`;
+  }
+
   /** 在 chrome 上方打印文本（文本以换行结尾时正好贴住 chrome 顶部）。
-   * raw 模式下终端不做 NL→CRNL 转换，统一在此归一化。
-   * 首次真实输出即收起欢迎面板（工作区开始承接内容）。
-   * 注意：清除下方后屏幕 chrome 区域失效 → lastFrame 置空，下次绘制走全量路径。 */
+   * raw 模式下终端不做 NL→CRNL 转换，统一在此归一化。 */
   function printAbove(text: string): void {
     welcomeActive = false;
     const nl = text.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
     const parts: string[] = [];
-    if (chromeDrawn) parts.push(RESTORE, CLEAR_BELOW);
+    parts.push(chromeDrawn ? eraseChromeSeq() : '\r');
     parts.push(nl);
     if (!nl.endsWith('\r\n')) parts.push('\r\n');
-    output.write(SYNC_ON + parts.join('') + SYNC_OFF);
+    output.write(parts.join(''));
     chromeDrawn = false;
     lastFrame = null;
-    frameInset = 0;
   }
 
   function boxTitle(): string {
@@ -313,8 +329,8 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     if (wizard !== null) return ANSI.bold(wizardQuestion(wizard));
     if (groupWizard !== null) return ANSI.bold(groupQuestion(groupWizard));
     const tier = permissionModeShort(agent.engine.mode);
-    const busyTag = busy ? ANSI.magenta(' · 处理中…') : '';
-    const queued = queuedInput !== null ? ANSI.dim(' · 已排队 1 条') : '';
+    const busyTag = busy ? ANSI.magenta(` · 处理中…${busySince !== null ? ` ${Math.floor((Date.now() - busySince) / 1000)}s` : ''}`) : '';
+    const queued = queuedInputs.length > 0 ? ANSI.dim(` · 已排队 ${queuedInputs.length} 条`) : '';
     return `${ANSI.cyan(`liwen (${model})`)}${busyTag}${queued} ${ANSI.dim(`· ${tier}`)}`;
   }
 
@@ -453,52 +469,42 @@ export async function runTui(opts: TuiOptions): Promise<number> {
   }
 
   /**
-   * 绘制 chrome 帧（差分渲染，消除闪烁）：
-   * - 同高/收缩帧：逐行比较，只原位重写变化行（不清屏、不整块擦除）；收缩时
-   *   保持底部锚定——新帧贴原帧底、上方多余行原位清空；
-   * - 增高帧 / 首次 / 屏幕内容失效（printAbove、resize 后）：全量重画；
-   * - 内容完全未变：跳过任何写入（空闲零输出，150ms 定时器不再造成周期性闪烁）。
-   * 光标定位到输入行（帧内 aboveBox+1 行）文本末尾——旧实现 +2 会让光标落在
-   * 框底边框行（已修正）。
-   * 全帧写入用 synchronized update 包裹，支持它的终端整帧原子交换。
+   * 绘制 chrome 帧（相对锚点 + 原子刷新）：
+   * - 锚点完全相对：光标固定停在输入行，重画时 CUU 回帧首、ED 清帧后重写；
+   *   不依赖 ESC7/ESC8（DECSC 保存的位置在内容滚动后会失配，终端行为不一，
+   *   会产生幽灵行/擦错区域）；
+   * - 帧收缩时用 CUD 保持底部锚定（输入框位置不跳）；
+   * - 内容完全未变 → 零写入（空闲不再周期性输出）；
+   * - 全帧写入用 synchronized update（2026）包裹，支持该模式的终端整帧原子交换。
    */
   function paintChromeFrame(frame: { lines: string[]; aboveBox: number; cursorVisCol: number }): void {
     const { lines, aboveBox, cursorVisCol } = frame;
-
-    if (chromeDrawn && lastFrame !== null && lines.length <= lastFrame.length) {
-      const old = lastFrame;
-      const d = old.length - lines.length; // 帧收缩 → 顶部空出的行数（保持底部锚定）
-      const inset = frameInset + d; // 新帧首行相对锚点的行偏移
-      const seq: string[] = [RESTORE];
-      let changed = d > 0;
-      if (frameInset > 0) seq.push(`\x1b[${frameInset}B`); // 移到旧帧首行
-      for (let i = 0; i < d; i++) seq.push('\r', ERASE_EOL, CUD1); // 清空收缩让出的行
-      for (let i = 0; i < lines.length; i++) {
-        if (lines[i] !== old[d + i]) {
-          seq.push('\r', lines[i]!, ERASE_EOL);
-          changed = true;
-        }
-        if (i < lines.length - 1) seq.push(CUD1);
-      }
-      if (!changed) return; // 内容未变：光标仍在上帧定位处，无需任何写入
-      seq.push(RESTORE, `\x1b[${aboveBox + 1 + inset}B`, `\x1b[${4 + cursorVisCol}C`);
-      output.write(SYNC_ON + seq.join('') + SYNC_OFF);
-      chromeDrawn = true;
-      lastFrame = lines;
-      frameInset = inset;
-      return;
+    if (chromeDrawn && lastFrame !== null && lastFrame.length === lines.length && lastFrame.every((l, i) => l === lines[i])) {
+      return; // 内容未变：零输出
     }
-
-    // 全量路径：首次绘制 / 屏幕内容失效 / 帧增高（必要时自然滚动）
     const seq: string[] = [];
-    seq.push(chromeDrawn ? RESTORE : SAVE);
-    if (chromeDrawn) seq.push(CLEAR_BELOW);
-    for (const line of lines) seq.push(`\r${line}\r\n`);
-    seq.push(RESTORE, `\x1b[${aboveBox + 1}B`, `\x1b[${4 + cursorVisCol}C`);
+    if (chromeDrawn && lastFrame !== null) {
+      const up = lastAboveBox + 1; // 输入行 → 旧帧首
+      if (up > 0) seq.push(`\x1b[${up}A`);
+      seq.push('\r', CLEAR_BELOW);
+      const d = lastFrame.length - lines.length;
+      if (d > 0) seq.push(`\x1b[${d}B`); // 底部锚定：收缩时新帧下移
+    } else {
+      seq.push('\r');
+    }
+    for (let i = 0; i < lines.length; i++) {
+      seq.push(lines[i]!);
+      if (i < lines.length - 1) seq.push('\r\n');
+    }
+    const inputRow = aboveBox + 1;
+    const upToInput = lines.length - 1 - inputRow;
+    seq.push('\r');
+    if (upToInput > 0) seq.push(`\x1b[${upToInput}A`);
+    seq.push(`\x1b[${4 + cursorVisCol}C`);
     output.write(SYNC_ON + seq.join('') + SYNC_OFF);
     chromeDrawn = true;
     lastFrame = lines;
-    frameInset = 0;
+    lastAboveBox = aboveBox;
   }
 
   /** 画欢迎面板（可选）+ 联想弹层（可选）+ 输入框（3 行）+ 状态行，并定位光标 */
@@ -554,13 +560,29 @@ export async function runTui(opts: TuiOptions): Promise<number> {
   /** 通用问答（/model config 等复用）：问题显示在框标题，编辑器提交即回答 */
   let promptQuestion = '';
   function makePrompt(): (q: string) => Promise<string> {
-    return (q: string) =>
-      new Promise<string>((resolve) => {
+    return (q: string) => {
+      // 快速连按 Enter：答案在问题就绪前已到达 → 直接消费，避免输入走失
+      if (queuedAnswers.length > 0) {
+        return Promise.resolve(queuedAnswers.shift()!);
+      }
+      return new Promise<string>((resolve) => {
         promptQuestion = q;
         mode = { kind: 'prompt', resolve };
         editor.clear();
         redraw();
       });
+    };
+  }
+
+  /** 问答引导包装：期间的 Enter 先入队（下一问就绪后立即消费）；结束后丢弃多余输入 */
+  async function guided<T>(fn: () => Promise<T>): Promise<T> {
+    guidedDepth++;
+    try {
+      return await fn();
+    } finally {
+      guidedDepth--;
+      if (guidedDepth === 0) queuedAnswers.length = 0;
+    }
   }
 
   // ── 键盘路由 ────────────────────────────────────────────────────────
@@ -601,7 +623,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
         handleInterrupt();
       } else if (ev.type === 'eof') {
         if (mode.kind === 'input' && !busy && editor.isEmpty()) {
-          output.write(RESTORE + CLEAR_BELOW + '\r\n' + ANSI.dim('再见。') + '\r\n');
+          output.write(goodbyeText());
           cleanup(0);
         }
       } else if (ev.type === 'nav') {
@@ -827,6 +849,13 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       redraw();
       return;
     }
+    // 问答引导进行中（下一问尚未就绪）：提交入队，由后续 makePrompt 消费
+    if (guidedDepth > 0) {
+      queuedAnswers.push(text);
+      editor.clear();
+      redraw();
+      return;
+    }
     // 指令联想激活时：Enter = 补全选中项（输入恰为完整命令名则直接执行）
     if (paletteHints.length > 0) {
       if (exactIndex(paletteHints, text) < 0) {
@@ -839,7 +868,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     }
     // 主输入
     if (busy) {
-      queuedInput = text;
+      if (queuedInputs.length < 16) queuedInputs.push(text);
       redraw();
       return;
     }
@@ -871,7 +900,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     }
     const now = Date.now();
     if (now - lastSigint < 2000) {
-      output.write(RESTORE + CLEAR_BELOW + '\r\n' + ANSI.dim('再见。') + '\r\n');
+      output.write(goodbyeText());
       cleanup(130);
       return;
     }
@@ -893,7 +922,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
         await handleSlash(slash);
       } catch (e) {
         if (e instanceof ExitTui) {
-          output.write(RESTORE + CLEAR_BELOW + '\r\n' + ANSI.dim('再见。') + '\r\n');
+          output.write(goodbyeText());
           cleanup(0);
           return;
         }
@@ -909,9 +938,8 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     }
     await runTurn(trimmed);
     redraw();
-    if (queuedInput !== null) {
-      const next = queuedInput;
-      queuedInput = null;
+    if (queuedInputs.length > 0) {
+      const next = queuedInputs.shift()!;
       printAbove(`${ANSI.cyan('❯')} ${next}\n`);
       await dispatch(next);
     }
@@ -923,6 +951,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     const expanded = await expandAtPaths(prompt, cwd, runtime);
     activeAbort = new AbortController();
     busy = true;
+    busySince = Date.now();
     const resumeId = pendingResume;
     pendingResume = undefined;
     let inText = false;
@@ -946,6 +975,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     } finally {
       if (inText) printAbove('\n');
       busy = false;
+      busySince = null;
       activeAbort = undefined;
       redraw();
     }
@@ -1028,11 +1058,11 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       case '/quit':
         throw new ExitTui();
       case '/model':
-        await cmdModel(cmd.args);
+        await (cmd.args[0] === 'config' ? guided(() => cmdModel(cmd.args)) : cmdModel(cmd.args));
         return;
       case '/permission':
       case '/permissions':
-        await cmdPermissions(cmd.args, cmd.name);
+        await guided(() => cmdPermissions(cmd.args, cmd.name));
         return;
       case '/status':
         cmdStatus();
@@ -1060,7 +1090,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
         startWizard();
         return;
       case '/manage':
-        await cmdManage(cmd.args);
+        await guided(() => cmdManage(cmd.args));
         return;
       case '/set-agents':
         startGroupWizard();
@@ -1464,9 +1494,11 @@ export async function runTui(opts: TuiOptions): Promise<number> {
   }
 
   function resizeHandler(): void {
-    chromeDrawn = false;
-    lastFrame = null; // 宽度变化会重排既有行，必须全量重画
-    frameInset = 0;
+    if (chromeDrawn) {
+      output.write(eraseChromeSeq());
+      chromeDrawn = false;
+      lastFrame = null;
+    }
     redraw();
   }
   output.on('resize', resizeHandler);
@@ -1482,7 +1514,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
   redraw();
   // 欢迎面板蝴蝶扇翅动画 + 状态栏实时速度共用此定时器
   statusTimer = setInterval(() => {
-    if (chromeDrawn) redraw();
+    if (chromeDrawn || busy) redraw();
   }, 150);
 
   if (opts.initialPrompt !== undefined && opts.initialPrompt.trim().length > 0) {

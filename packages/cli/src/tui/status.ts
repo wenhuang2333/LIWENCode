@@ -70,7 +70,9 @@ export class StatusTracker {
   onEvent(ev: AgentEvent, nowMs: number): void {
     switch (ev.type) {
       case 'turn.start':
-        this.turn = ev.turn;
+        // 每轮用户消息的 agent.run 都从 turn=1 开始（工具循环才会 2、3…）：
+        // 只在 run 首轮递增，得到累计用户轮次（状态栏"第几轮"）
+        if (ev.turn === 1) this.turn += 1;
         break;
       case 'tool.start':
         this.step++;
