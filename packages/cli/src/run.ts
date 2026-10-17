@@ -14,6 +14,7 @@ import { MockProvider } from '@liwencode/testing';
 import type { CliArgs } from './args.js';
 import { resolvePermissionTier } from './args.js';
 import { readUserConfig } from './model-config.js';
+import { buildCliContext } from './context.js';
 import { resolveProvider } from './provider-select.js';
 
 /** BR-042 exit codes. */
@@ -62,6 +63,7 @@ export async function runPrint(args: CliArgs, prompt: string): Promise<number> {
     provider,
     model: provider.model,
     cwd: args.cwd ?? process.cwd(),
+    context: buildCliContext(args.cwd ?? process.cwd()),
     tools,
     permissionMode: tier.mode,
     permissionHandler: headlessHandler,

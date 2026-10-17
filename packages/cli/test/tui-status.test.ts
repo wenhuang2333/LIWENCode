@@ -40,7 +40,17 @@ describe('tui/status 状态指标', () => {
     // cacheHit = 700 / (700 + 300 + 100) = 0.636…
     expect(snap.cacheHitRate).toBeCloseTo(700 / 1100, 5);
     expect(snap.totalTokens).toBe(300 + 700 + 100 + 100 + 0 + 50);
-    expect(snap.contextUsed).toBe(300 + 700 + 100 + 100 + 0 + 50);
+    // 上下文占用 = 最近一次请求（100 in + 50 out），不是累计计费量
+    expect(snap.contextUsed).toBe(150);
+  });
+
+  it('上下文占用不随多轮请求累加（状态栏不会虚报爆表）', () => {
+    const t = new StatusTracker({ model: 'deepseek:deepseek-chat', contextWindow: 128_000 });
+    for (let i = 0; i < 7; i++) t.onEvent(usageEv({ inputTokens: 4800, cacheReadTokens: 3600, outputTokens: 1800 }), 0);
+    const snap = t.snapshot(0);
+    expect(snap.contextUsed).toBe(4800 + 1800);
+    expect(snap.totalTokens).toBe(7 * (4800 + 3600 + 1800));
+    expect(formatStatusLine(snap, 200)).toContain('6.6k/128.0k');
   });
 
   it('无缓存数据时命中率为 null', () => {

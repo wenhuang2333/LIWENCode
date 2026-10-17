@@ -24,7 +24,7 @@ describe('openai-compatible adapter (FR-012)', () => {
         JSON.stringify({ choices: [{ delta: { content: 'hel' } }] }),
         JSON.stringify({ choices: [{ delta: { content: 'lo' } }] }),
         JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
-        JSON.stringify({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 3 } }),
+        JSON.stringify({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 3, cost: 0.0012 } }),
       ],
     }));
     servers.push(server);
@@ -33,8 +33,9 @@ describe('openai-compatible adapter (FR-012)', () => {
     const stop = events.find((e) => (e as { type: string }).type === 'message_stop') as { stopReason: string; message: { content: { type: string; text?: string }[] } };
     expect(stop.stopReason).toBe('end_turn');
     expect(stop.message.content[0]?.text).toBe('hello');
-    const usage = events.find((e) => (e as { type: string }).type === 'usage') as { usage: { inputTokens: number } };
+    const usage = events.find((e) => (e as { type: string }).type === 'usage') as { usage: { inputTokens: number; costUsd?: number } };
     expect(usage.usage.inputTokens).toBe(12);
+    expect(usage.usage.costUsd).toBe(0.0012);
   });
 
   it('aggregates streamed tool_calls into tool_use blocks', async () => {
@@ -55,6 +56,31 @@ describe('openai-compatible adapter (FR-012)', () => {
     expect(tu?.type).toBe('tool_use');
     expect(tu?.name).toBe('read');
     expect(tu?.input).toEqual({ path: 'a.txt' });
+  });
+
+  it('tolerates usage:null chunks and streams gateway reasoning as thinking', async () => {
+    const server = await startSseMock(() => ({
+      status: 200,
+      events: [
+        JSON.stringify({ choices: [{ delta: { reasoning: 'think ' } }] }),
+        JSON.stringify({ choices: [{ delta: { reasoning: 'more' } }] }),
+        JSON.stringify({ choices: [{ delta: { content: 'answer' } }] }),
+        JSON.stringify({ choices: [], usage: null }),
+        JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+        JSON.stringify({ choices: [], usage: { prompt_tokens: 7, completion_tokens: 4 } }),
+      ],
+    }));
+    servers.push(server);
+    const provider = createOpenAICompatibleProvider({ runtime, baseUrl: server.url, apiKey: 'sk-test' });
+    const events = await drain(provider.stream({ model: 'm', messages: [userText('hi', 'u1')] }, { signal: new AbortController().signal }));
+    const stop = events.find((e) => (e as { type: string }).type === 'message_stop') as {
+      message: { content: { type: string; text?: string }[] };
+    };
+    expect(stop.message.content.map((b) => b.type)).toEqual(['thinking', 'text']);
+    expect(stop.message.content[0]?.text).toBe('think more');
+    expect(stop.message.content[1]?.text).toBe('answer');
+    const starts = events.filter((e) => (e as { type: string }).type === 'block_start') as { index: number; block: { type: string } }[];
+    expect(starts.map((e) => e.block.type)).toEqual(['thinking', 'text']);
   });
 
   it('sends history with tool_result as role=tool messages (FR-010 wire legality)', async () => {

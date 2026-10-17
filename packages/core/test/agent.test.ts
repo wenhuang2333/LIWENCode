@@ -216,4 +216,43 @@ describe('agent loop (FR-001..006)', () => {
     expect(summaries.every((s) => s.finalText === 'mine')).toBe(true);
     expect(new Set(agents.map((a) => a.sessionId)).size).toBe(20);
   });
+
+  it('routes thinking block deltas to thinking.delta, not text.delta', async () => {
+    const provider: Provider = {
+      id: 'thinking',
+      capabilities: () => ({
+        contextWindow: 100_000,
+        maxOutputTokens: 4_096,
+        parallelToolCalls: true,
+        thinking: 'budget',
+        promptCache: 'none',
+        vision: false,
+        structuredOutput: true,
+      }),
+      async *stream(): AsyncGenerator<ModelStreamEvent> {
+        const thinking = { type: 'thinking' as const, text: 'plan' };
+        const text = { type: 'text' as const, text: 'answer' };
+        yield { type: 'block_start', index: 0, block: thinking };
+        yield { type: 'block_delta', index: 0, delta: 'pla' };
+        yield { type: 'block_delta', index: 0, delta: 'n' };
+        yield { type: 'block_start', index: 1, block: text };
+        yield { type: 'block_delta', index: 1, delta: 'answer' };
+        yield {
+          type: 'message_stop',
+          stopReason: 'end_turn',
+          message: { id: 'a1', role: 'assistant', content: [thinking, text], meta: { createdAt: 0 } },
+        };
+      },
+    };
+    const agent = createAgent({ provider, model: 'm', runtime: fakeRuntime() });
+    const events: AgentEvent[] = [];
+    const stream = agent.run('go');
+    for (;;) {
+      const r = await stream.next();
+      if (r.done) break;
+      events.push(r.value);
+    }
+    expect(events.filter((e) => e.type === 'thinking.delta').map((e) => (e.type === 'thinking.delta' ? e.text : ''))).toEqual(['pla', 'n']);
+    expect(events.filter((e) => e.type === 'text.delta').map((e) => (e.type === 'text.delta' ? e.text : ''))).toEqual(['answer']);
+  });
 });

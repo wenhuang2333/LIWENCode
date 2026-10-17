@@ -41,6 +41,7 @@ import { createBuiltinTools } from '@liwencode/tools';
 import type { CliArgs } from '../args.js';
 import { resolvePermissionTier } from '../args.js';
 import { buildProvider, type ProviderSpec } from '../provider-select.js';
+import { buildCliContext } from '../context.js';
 import { helpText, parsePermissionArg, parseSlash, permissionModeShort, permissionTierPanel } from '../slash.js';
 import {
   catalogEntry,
@@ -209,6 +210,8 @@ export async function runTui(opts: TuiOptions): Promise<number> {
   const redactor = new Redactor();
   const sessionStore = new FileSessionStore(runtime, `${liwenHome()}/sessions`, String(projectHashOf(cwd)));
   const { tools } = createBuiltinTools();
+  // FR-051/FR-083：工作目录 + AGENTS.md/CLAUDE.md 项目指令（启动时读取一次）
+  const cliContext = buildCliContext(cwd);
   const usageTotals: UsageTotals = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, requests: 0 };
 
   await playBoot(opts.args.noBoot === true);
@@ -247,6 +250,8 @@ export async function runTui(opts: TuiOptions): Promise<number> {
 
   let busy = false;
   let busySince: number | null = null;
+  /** 流式输出是否停在一个未结束的行上：此时不重画 chrome（否则会覆盖半行文本） */
+  let streamMidLine = false;
   /** 忙碌期间用户提交的消息队列（保序，不覆盖丢弃；上限 16） */
   const queuedInputs: string[] = [];
   /** 问答引导进行中：提前到达的 Enter 先入队，避免下一问尚未就绪时输入走失 */
@@ -296,6 +301,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       provider,
       model: provider.model,
       cwd,
+      context: cliContext,
       tools,
       permissionMode,
       rules: sessionRules,
@@ -340,6 +346,24 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     output.write(parts.join(''));
     chromeDrawn = false;
     lastFrame = null;
+    streamMidLine = false;
+  }
+
+  /** 打印流式片段：不强制换行（换行由 flush/closeStreamLines 决定），
+   * 使 16ms 一批的 delta 自然拼成连续段落而不是碎行。 */
+  function printStream(text: string): void {
+    if (text === '') return;
+    welcomeActive = false;
+    const nl = text.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
+    const parts: string[] = [];
+    if (chromeDrawn) {
+      parts.push(eraseChromeSeq());
+      chromeDrawn = false;
+      lastFrame = null;
+    }
+    parts.push(toAscii(nl));
+    output.write(parts.join(''));
+    streamMidLine = !nl.endsWith('\r\n');
   }
 
   function boxTitle(): string {
@@ -542,6 +566,8 @@ export async function runTui(opts: TuiOptions): Promise<number> {
 
   /** 画欢迎面板（可选）+ 联想弹层（可选）+ 输入框（3 行）+ 状态行，并定位光标 */
   function drawChrome(): void {
+    // 流式半行期间不画：chrome 会覆盖尚未结束的文本行（等 closeStreamLines 收尾后再画）
+    if (streamMidLine) return;
     // pty/极窄终端下列数可能为 0，做下限保护（repeat 负数会抛错）
     const cols = Math.max(24, output.columns ?? 80);
     paintChromeFrame(buildChromeFrame(cols));
@@ -1026,20 +1052,46 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     busySince = Date.now();
     const resumeId = pendingResume;
     pendingResume = undefined;
-    let inText = false;
+    // 思考流（reasoning）与正文分开渲染：思考行暗色 + "⋯" 前缀
+    let thinkingPrefix = false;
     // 增量批处理：provider 高频小 delta 合并到 16ms 一次写入
     let streamBuf = '';
+    let streamKind: 'text' | 'thinking' = 'text';
     let streamTimer: NodeJS.Timeout | undefined;
     const flushStream = (): void => {
       if (streamTimer !== undefined) {
         clearTimeout(streamTimer);
         streamTimer = undefined;
       }
-      if (streamBuf !== '') {
-        const out = streamBuf;
-        streamBuf = '';
-        printAbove(out);
+      if (streamBuf === '') return;
+      const out = streamBuf;
+      streamBuf = '';
+      if (streamKind === 'thinking') {
+        if (!thinkingPrefix) {
+          printStream(ANSI.dim('  ⋯ '));
+          thinkingPrefix = true;
+        }
+        printStream(ANSI.dim(out));
+      } else {
+        if (thinkingPrefix) {
+          printStream('\r\n');
+          thinkingPrefix = false;
+        }
+        printStream(out);
       }
+    };
+    const pushDelta = (kind: 'text' | 'thinking', text: string): void => {
+      if (streamBuf !== '' && kind !== streamKind) flushStream();
+      streamKind = kind;
+      streamBuf += text;
+      if (streamTimer === undefined) streamTimer = setTimeout(flushStream, 16);
+    };
+    /** 结束当前流式行（工具行/正文前调用），返回后输出从新行开始 */
+    const closeStreamLines = (): void => {
+      flushStream();
+      if (streamMidLine) printStream('\r\n');
+      thinkingPrefix = false;
+      streamMidLine = false;
     };
     try {
       const stream = agent.run(expanded, { signal: activeAbort.signal, ...(resumeId !== undefined ? { sessionId: resumeId } : {}) });
@@ -1059,8 +1111,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       if (LiwenError.is(e)) printAbove(`${ANSI.red(`错误 ${e.code}: ${e.message}`)}\n`);
       else printAbove(`${ANSI.red(`错误: ${e instanceof Error ? e.message : String(e)}`)}\n`);
     } finally {
-      flushStream();
-      if (inText) printAbove('\n');
+      closeStreamLines();
       busy = false;
       busySince = null;
       activeAbort = undefined;
@@ -1071,22 +1122,17 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       tracker.onEvent(ev, Date.now());
       switch (ev.type) {
         case 'text.delta':
-          inText = true;
-          streamBuf += ev.text;
-          if (streamTimer === undefined) {
-            streamTimer = setTimeout(flushStream, 16);
-          }
+          pushDelta('text', ev.text);
+          break;
+        case 'thinking.delta':
+          pushDelta('thinking', ev.text);
           break;
         case 'tool.start':
-          flushStream();
-          if (inText) {
-            printAbove('\r\n');
-            inText = false;
-          }
+          closeStreamLines();
           printAbove(`${ANSI.dim(`  ⚙ ${ev.name} ${summarizeInput(ev.input)}`)}\r\n`);
           break;
         case 'tool.result': {
-          flushStream();
+          closeStreamLines();
           const first = ev.content.find((c) => c.type === 'text');
           const text = first !== undefined && first.type === 'text' ? first.text : '';
           const oneline = text.split('\n').slice(0, 2).join(' ⏎ ').slice(0, 160);

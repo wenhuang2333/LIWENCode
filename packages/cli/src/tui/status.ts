@@ -50,6 +50,9 @@ export class StatusTracker {
   private totalInput = 0;
   private totalOutput = 0;
   private totalCacheRead = 0;
+  /** 最近一次请求的 token（上下文占用 = 该次输入 + 输出，不是累计计费量） */
+  private lastInput = 0;
+  private lastOutput = 0;
   private sawCacheField = false;
   private lastSpeed: number | null = null;
   // 流式实时速度
@@ -78,6 +81,7 @@ export class StatusTracker {
         this.step++;
         break;
       case 'text.delta':
+      case 'thinking.delta':
         if (this.streamStart === null) this.streamStart = nowMs;
         this.streamChars += ev.text.length;
         break;
@@ -85,15 +89,11 @@ export class StatusTracker {
         // 一条 assistant 消息结束：以累计字符估算速度（估算器与 delta 计数一致）
         if (this.streamStart !== null) {
           const secs = Math.max(0.05, (nowMs - this.streamStart) / 1000);
-          const outTokens =
-            ev.message.content.find((b) => b.type === 'text' && 'text' in b)?.type === 'text'
-              ? estimateTokensOfText(
-                  ev.message.content
-                    .filter((b): b is Extract<typeof b, { type: 'text' }> => b.type === 'text')
-                    .map((b) => b.text)
-                    .join(''),
-                )
-              : this.streamChars / 4;
+          const streamed = ev.message.content
+            .filter((b): b is Extract<typeof b, { type: 'text' | 'thinking' }> => b.type === 'text' || b.type === 'thinking')
+            .map((b) => b.text)
+            .join('');
+          const outTokens = streamed !== '' ? estimateTokensOfText(streamed) : this.streamChars / 4;
           if (outTokens > 0) this.lastSpeed = Math.round((outTokens / secs) * 10) / 10;
         }
         this.streamStart = null;
@@ -103,6 +103,8 @@ export class StatusTracker {
       case 'usage':
         this.totalInput += ev.usage.inputTokens;
         this.totalOutput += ev.usage.outputTokens;
+        this.lastInput = ev.usage.inputTokens;
+        this.lastOutput = ev.usage.outputTokens;
         if (ev.usage.cacheReadTokens !== undefined) {
           this.sawCacheField = true;
           this.totalCacheRead += ev.usage.cacheReadTokens;
@@ -123,8 +125,8 @@ export class StatusTracker {
   }
 
   snapshot(nowMs: number): StatusSnapshot {
-    // 上下文估算：最近一次请求的 input（+缓存读）+ 历史输出累积的粗略和
-    const contextUsed = this.totalInput + this.totalCacheRead + this.totalOutput;
+    // 上下文占用：最近一次请求的输入 + 输出（累计量会把多轮请求叠加成“爆表”）
+    const contextUsed = this.lastInput + this.lastOutput;
     const cacheTotal = this.totalCacheRead + this.totalInput;
     // provider 从未上报缓存字段（mock 等）时不显示命中率，避免把“未上报”当成 0%
     const cacheHitRate = this.sawCacheField && cacheTotal > EPS ? this.totalCacheRead / cacheTotal : null;

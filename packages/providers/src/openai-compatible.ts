@@ -88,14 +88,14 @@ export function createOpenAICompatibleProvider(opts: OpenAICompatibleOptions): P
       // Assemble normalized events from the wire stream.
       const blocks: ContentBlock[] = [];
       const toolCalls = new Map<number, { id: string; name: string; args: string }>();
-      const usage: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number } = { inputTokens: 0, outputTokens: 0 };
+      const usage: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costUsd?: number } = { inputTokens: 0, outputTokens: 0 };
       let finishReason = 'stop';
       let emittedAny = false;
 
       for await (const data of sseEvents(res)) {
         if (data === '[DONE]') break;
         let chunk: {
-      choices?: { delta?: { content?: string | null; reasoning_content?: string | null; tool_calls?: { index: number; id?: string; function?: { name?: string; arguments?: string } }[] }; finish_reason?: string | null }[];
+      choices?: { delta?: { content?: string | null; reasoning?: string | null; reasoning_content?: string | null; tool_calls?: { index: number; id?: string; function?: { name?: string; arguments?: string } }[] }; finish_reason?: string | null }[];
           usage?: {
             prompt_tokens?: number;
             completion_tokens?: number;
@@ -104,6 +104,9 @@ export function createOpenAICompatibleProvider(opts: OpenAICompatibleOptions): P
             prompt_cache_miss_tokens?: number;
             /** OpenAI 兼容形态（部分网关返回） */
             prompt_tokens_details?: { cached_tokens?: number };
+            /** 网关直接上报的本次请求费用 */
+            cost?: number;
+            gateway_cost?: number;
           };
         };
         try {
@@ -111,7 +114,7 @@ export function createOpenAICompatibleProvider(opts: OpenAICompatibleOptions): P
         } catch {
           throw new LiwenError({ code: 'LW-PRV-008', message: 'unparsable SSE chunk', details: { data: data.slice(0, 200) } });
         }
-        if (chunk.usage !== undefined) {
+        if (chunk.usage !== undefined && chunk.usage !== null) {
           usage.inputTokens = chunk.usage.prompt_tokens ?? usage.inputTokens;
           usage.outputTokens = chunk.usage.completion_tokens ?? usage.outputTokens;
           const cached =
@@ -120,24 +123,31 @@ export function createOpenAICompatibleProvider(opts: OpenAICompatibleOptions): P
           if (cached !== undefined && cached > 0) {
             usage.cacheReadTokens = cached;
           }
+          const reportedCost = chunk.usage.cost ?? chunk.usage.gateway_cost;
+          if (typeof reportedCost === 'number' && Number.isFinite(reportedCost)) {
+            usage.costUsd = reportedCost;
+          }
         }
         const choice = chunk.choices?.[0];
         if (choice === undefined) continue;
         if (choice.finish_reason !== null && choice.finish_reason !== undefined) finishReason = choice.finish_reason;
         const delta = choice.delta ?? {};
 
-        if (delta.reasoning_content !== null && delta.reasoning_content !== undefined) {
+        const reasoning = delta.reasoning ?? delta.reasoning_content;
+        if (reasoning !== null && reasoning !== undefined && reasoning !== '') {
           if (blocks[blocks.length - 1]?.type !== 'thinking') {
             blocks.push({ type: 'thinking', text: '' });
+            yield { type: 'block_start', index: blocks.length - 1, block: blocks[blocks.length - 1]! };
           }
           const last = blocks[blocks.length - 1]!;
-          if (last.type === 'thinking') last.text += delta.reasoning_content;
-          yield { type: 'block_delta', index: blocks.length - 1, delta: delta.reasoning_content };
+          if (last.type === 'thinking') last.text += reasoning;
+          yield { type: 'block_delta', index: blocks.length - 1, delta: reasoning };
           emittedAny = true;
         }
         if (delta.content !== null && delta.content !== undefined) {
           if (blocks[blocks.length - 1]?.type !== 'text') {
             blocks.push({ type: 'text', text: '' });
+            yield { type: 'block_start', index: blocks.length - 1, block: blocks[blocks.length - 1]! };
           }
           const last = blocks[blocks.length - 1]!;
           if (last.type === 'text') last.text += delta.content;

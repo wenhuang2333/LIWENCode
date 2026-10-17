@@ -37,6 +37,7 @@ import {
 } from './model-config.js';
 import { formatDoctor, runDoctor } from './doctor.js';
 import { expandAtPaths, summarizeInput } from './prompt-utils.js';
+import { buildCliContext } from './context.js';
 
 /**
  * Interactive REPL (FR-130 / FR-137 subset). Readline-based: streaming
@@ -111,6 +112,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       provider,
       model: provider.model,
       cwd,
+      context: buildCliContext(cwd),
       tools,
       permissionMode,
       rules: sessionRules,

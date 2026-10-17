@@ -172,16 +172,27 @@ export function createAgent(config: AgentConfig): Agent {
 
         let assistant: Message | undefined;
         let assistantStopReason: 'end_turn' | 'tool_use' | 'max_tokens' | 'refusal' | 'error' = 'end_turn';
+        // Block index → kind, learned from block_start. Required to route
+        // thinking deltas separately from answer text (real providers stream both).
+        const blockKinds = new Map<number, string>();
         try {
           for await (const ev of provider.stream(request, { signal })) {
             if (ev.type === 'message_stop') {
               assistant = ev.message;
               assistantStopReason = ev.stopReason;
             }
+            if (ev.type === 'block_start') {
+              blockKinds.set(ev.index, ev.block.type);
+            }
             // Forward content increments for streaming UIs (ADR-02).
             if (ev.type === 'block_delta') {
-              bus.emit({ type: 'text.delta', text: ev.delta });
-              yield { type: 'text.delta', text: ev.delta };
+              if (blockKinds.get(ev.index) === 'thinking') {
+                bus.emit({ type: 'thinking.delta', text: ev.delta });
+                yield { type: 'thinking.delta', text: ev.delta };
+              } else {
+                bus.emit({ type: 'text.delta', text: ev.delta });
+                yield { type: 'text.delta', text: ev.delta };
+              }
             }
             if (ev.type === 'usage') {
               totalUsage.inputTokens += ev.usage.inputTokens;
@@ -420,6 +431,8 @@ export function planBatches(calls: ToolCall[], registry: ToolRegistry): ToolCall
 }
 
 function costOf(usage: Usage, pricing: { inputPerMTok: number; outputPerMTok: number; cacheReadPerMTok?: number; cacheWritePerMTok?: number } | undefined): number | undefined {
+  // 网关直接上报的费用最准确（含路由/折扣），优先于本地价目表
+  if (usage.costUsd !== undefined) return usage.costUsd;
   if (pricing === undefined) return undefined;
   let cost = 0;
   cost += (usage.inputTokens / 1e6) * pricing.inputPerMTok;

@@ -74,58 +74,162 @@ export class ToolRegistry {
 }
 
 /**
- * Minimal Zod → JSON Schema conversion. Covers the constructs our own tools
- * use (object/string/number/boolean/enum/optional/default/describe) and leaves
- * anything exotic as `{}` (any), which is what MCP servers tolerate too.
+ * Zod → JSON Schema conversion (ADR-07). Covers every construct our own tools
+ * use plus the common ones MCP servers hand us; anything exotic degrades to
+ * `{}` (any) rather than throwing, which is what MCP tolerates too.
+ *
+ * Two Zod internals matter here:
+ * - The kind lives in `_def.typeName` (v3) or `_def.type` (v4).
+ * - `_def.shape` is a *function* on v3.25+ objects, an object before that and
+ *   in v4 — calling `Object.entries` on the function silently yields no
+ *   properties, which ships an empty parameter schema to the model.
  */
 export function zodToJsonSchema(schema: z.ZodType): Record<string, unknown> {
   const def = schema._def as Record<string, unknown>;
-  switch (def.typeName) {
-    case 'ZodObject': {
-      const shape = def.shape as Record<string, z.ZodType>;
+  const kind = (def.typeName ?? def.type) as string | undefined;
+  const out = convert(def, kind);
+  const description = def.description;
+  if (typeof description === 'string' && description !== '') out.description = description;
+  return out;
+}
+
+function convert(def: Record<string, unknown>, kind: string | undefined): Record<string, unknown> {
+  switch (kind) {
+    case 'ZodObject':
+    case 'object': {
+      const shapeRaw = def.shape;
+      const shape = (typeof shapeRaw === 'function'
+        ? (shapeRaw as () => Record<string, z.ZodType>)()
+        : shapeRaw) as Record<string, z.ZodType> | undefined;
       const properties: Record<string, unknown> = {};
       const required: string[] = [];
-      for (const [key, value] of Object.entries(shape)) {
+      for (const [key, value] of Object.entries(shape ?? {})) {
         properties[key] = zodToJsonSchema(value);
         const inner = value._def as Record<string, unknown>;
-        const isOptional = inner.typeName === 'ZodOptional';
-        const hasDefault = inner.typeName === 'ZodDefault';
-        if (!isOptional && !hasDefault) required.push(key);
+        const innerKind = (inner.typeName ?? inner.type) as string | undefined;
+        // ZodDefault supplies the value when omitted, so it is not required.
+        if (innerKind !== 'ZodOptional' && innerKind !== 'optional' && innerKind !== 'ZodDefault' && innerKind !== 'default') {
+          required.push(key);
+        }
       }
-      return { type: 'object', properties, required: required.length > 0 ? required : undefined };
+      return required.length > 0 ? { type: 'object', properties, required } : { type: 'object', properties };
     }
-    case 'ZodString': {
+    case 'ZodString':
+    case 'string': {
       const out: Record<string, unknown> = { type: 'string' };
-      const checks = (def.checks ?? []) as { kind?: string; value?: unknown }[];
-      for (const c of checks) {
-        if (c.kind === 'min') out.minLength = c.value;
-        if (c.kind === 'max') out.maxLength = c.value;
+      for (const c of checksOf(def)) {
+        if (c.kind === 'min' || c.kind === 'min_length') out.minLength = c.value;
+        if (c.kind === 'max' || c.kind === 'max_length') out.maxLength = c.value;
+        if (c.kind === 'regex' || c.kind === 'regex_pattern') out.pattern = String(c.value);
       }
       return out;
     }
     case 'ZodNumber':
-      return { type: 'number' };
-    case 'ZodBoolean':
-      return { type: 'boolean' };
-    case 'ZodArray':
-      return { type: 'array', items: zodToJsonSchema(def.type as z.ZodType) };
-    case 'ZodEnum':
-      return { type: 'string', enum: def.values };
-    case 'ZodLiteral':
-      return { type: 'string', enum: [def.value] };
-    case 'ZodOptional':
-    case 'ZodNullable':
-      return zodToJsonSchema(def.innerType as z.ZodType);
-    case 'ZodDefault':
-      return { ...zodToJsonSchema(def.innerType as z.ZodType), default: (def.defaultValue as () => unknown)() };
-    case 'ZodUnion': {
-      const options = (def.options as z.ZodType[]).map(zodToJsonSchema);
-      return { anyOf: options };
+    case 'number': {
+      const out: Record<string, unknown> = { type: 'number' };
+      for (const c of checksOf(def)) {
+        if (c.kind === 'min' || c.kind === 'greater_than') out.minimum = c.value;
+        if (c.kind === 'max' || c.kind === 'less_than') out.maximum = c.value;
+        if (c.kind === 'int') out.type = 'integer';
+      }
+      return out;
     }
+    case 'ZodBoolean':
+    case 'boolean':
+      return { type: 'boolean' };
+    case 'ZodNull':
+    case 'null':
+      return { type: 'null' };
+    case 'ZodDate':
+    case 'date':
+      return { type: 'string', format: 'date-time' };
+    case 'ZodAny':
+    case 'ZodUnknown':
+    case 'any':
+    case 'unknown':
+      return {};
+    case 'ZodArray':
+    case 'array':
+      return { type: 'array', items: zodToJsonSchema((def.type ?? def.element) as z.ZodType) };
+    case 'ZodTuple':
+    case 'tuple': {
+      const items = ((def.items ?? []) as z.ZodType[]).map(zodToJsonSchema);
+      return { type: 'array', items, minItems: items.length, maxItems: items.length };
+    }
+    case 'ZodEnum':
+    case 'enum':
+      return { type: 'string', enum: def.values ?? def.entries };
+    case 'ZodNativeEnum':
+    case 'nativeEnum': {
+      const values = def.values as Record<string, string | number>;
+      return { enum: Object.values(values) };
+    }
+    case 'ZodLiteral':
+    case 'literal': {
+      const value = def.value;
+      return { enum: [value], ...(typeof value === 'string' ? { type: 'string' } : typeof value === 'number' ? { type: 'number' } : typeof value === 'boolean' ? { type: 'boolean' } : {}) };
+    }
+    case 'ZodOptional':
+    case 'optional':
+    case 'ZodNullable':
+    case 'nullable':
+    case 'ZodReadonly':
+    case 'readonly':
+      return zodToJsonSchema((def.innerType ?? def.inner) as z.ZodType);
+    case 'ZodDefault':
+    case 'default': {
+      const inner = zodToJsonSchema((def.innerType ?? def.inner) as z.ZodType);
+      try {
+        return { ...inner, default: (def.defaultValue as () => unknown)() };
+      } catch {
+        return inner;
+      }
+    }
+    case 'ZodEffects':
+    case 'ZodPipeline':
+    case 'pipe': {
+      // Refinements/transforms do not change the wire shape — unwrap to the source schema.
+      return zodToJsonSchema((def.schema ?? def.innerType ?? def.in) as z.ZodType);
+    }
+    case 'ZodRecord':
+    case 'record': {
+      const valueType = (def.valueType ?? def.value) as z.ZodType | undefined;
+      return {
+        type: 'object',
+        additionalProperties: valueType !== undefined ? zodToJsonSchema(valueType) : true,
+      };
+    }
+    case 'ZodUnion':
+    case 'union':
+    case 'ZodDiscriminatedUnion':
+    case 'discriminatedUnion': {
+      const options = (def.options as z.ZodType[] | Map<unknown, z.ZodType> | undefined) ?? [];
+      const list = Array.isArray(options) ? options : [...options.values()];
+      return { anyOf: list.map(zodToJsonSchema) };
+    }
+    case 'ZodIntersection':
+    case 'intersection':
+      return { allOf: [zodToJsonSchema(def.left as z.ZodType), zodToJsonSchema(def.right as z.ZodType)] };
+    case 'ZodLazy':
+    case 'lazy':
+      // Recursive schemas: one level is enough for tool parameters.
+      return {};
     default:
       return {};
   }
 }
+
+/** v3 stores `{kind, value}` checks; v4 nests them under `_zod.def`. */
+function checksOf(def: Record<string, unknown>): { kind: string; value: unknown }[] {
+  const raw = (def.checks ?? []) as Record<string, unknown>[];
+  return raw.map((c) => {
+    const inner = (c._zod as { def?: Record<string, unknown> } | undefined)?.def ?? c;
+    const kind = String(inner.check ?? inner.kind ?? '');
+    const value = inner.value ?? inner.minimum ?? inner.maximum ?? inner.min ?? inner.max;
+    return { kind, value };
+  });
+}
+
 
 export function textContent(text: string): ToolResultContent[] {
   return [{ type: 'text', text }];

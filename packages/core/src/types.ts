@@ -57,6 +57,8 @@ export interface Usage {
   outputTokens: number;
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
+  /** 供应商直接上报的费用（网关/OpenRouter 等）；优先于本地定价表计算 */
+  costUsd?: number;
 }
 
 export interface ToolCall {

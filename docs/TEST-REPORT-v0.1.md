@@ -268,20 +268,52 @@ openai-compatible 新增 authStyle：x-api-key 头与 ?key= 查询参数按配�
 
 新增 8 项终端健壮层单测（`tui-terminal.test.ts`）：极小窗口判定、转义分片识别、粘贴清洗（含跨块/回归）、OSC 11 亮度解析、ASCII 降级。
 
-## 11. 已知限制（v0.1 范围外，按 WBS 顺延）
+## 11. 真实模型端到端验证（v0.1 追加，DeepSeek-V4.1-Flash / OpenAI ChatCompletion 网关）
 
-- 真实模型 Provider 仅经本地 SSE mock 验证合约（G2 的"真实密钥联调"待 M1 收尾/用户提供密钥后补充 DeepSeek 实测）。
-- TUI、会话恢复 CLI、自动压缩、MCP、决策层、三角色编排未实现（M2~M4 范围）。
+环境：`https://fun.zionlin.com/v1` + `deepseek-v4.1-flash`，Chat Completions 协议。密钥只写入测试 HOME 的 `~/.liwencode/env`（0600），不进仓库、会话与日志；驱动脚本为工作区 `test/tui-real-model.py`（仓库外，pty+pyte 截图）。
+
+### 11.1 `/setup` 真实配置（6 步向导）
+
+模型名 → 请求地址 → API Key（掩码 `••••••••`）→ 协议选择（↑↓ 选中 OpenAI ChatCompletion）→ 认证字段（Bearer）→ 档案名 `zionlin` → 保存并激活。落盘结果：`~/.liwencode/config.json`（非密）+ `~/.liwencode/env`（0600），`/model` 面板出现 `@zionlin`，原始输入输出中未出现密钥明文。截图：`test/tui-real/01-setup/`。
+
+### 11.2 真实联调发现并修复的 7 个缺陷
+
+| # | 现象 | 根因 | 修复 |
+| --- | --- | --- | --- |
+| 1 | 首轮工具调用反复报 `Invalid arguments for 'write'. path: Required; content: Required`，模型只能靠报错猜测参数名 | zod 3.25 的 `_def.shape` 是函数，`Object.entries(function)` 得到空对象 → 发送给模型的 schema 全是 `{type:'object',properties:{}}` | 重写 `zodToJsonSchema`：兼容函数/对象 shape 与 v3/v4 类型名，补齐 record/union/effects/tuple/nativeEnum/intersection 等；新增 6 项单测（core 66） |
+| 2 | 部分请求直接崩溃 `Cannot read properties of null (reading 'prompt_tokens')` | 网关会发送 `"usage": null` 分片，provider 只判 `!== undefined` | 增加 null 守卫 + 回归测试 |
+| 3 | 模型思考期间界面只有计时，无任何内容 | 网关用 `delta.reasoning`（不是 `reasoning_content`），被 provider 丢弃 | provider 同时识别两种字段并发出 `block_start`；core 把 thinking block 的 delta 路由为 `thinking.delta`；TUI 用暗色 `⋯` 前缀实时显示，速度统计计入思考 token |
+| 4 | 流式正文被拆成大量短行（每个 16ms 批次一行） | `printAbove` 对流式片段也强制补换行 | 新增 `printStream`：不强制换行、chrome 感知；半行期间暂停 chrome 重绘，工具行/正文切换时统一收尾 |
+| 5 | 状态栏「上下文 71.1k/128k（56%）」虚报，与 `/status` 面板 13.0k 冲突 | 上下文占用用了累计计费 token（input+output+cache 之和） | 改为最近一次请求的 `input+output`；新增多轮不累加回归测试 |
+| 6 | `/cost` 始终显示 `(provider provides no pricing)`，但网关实际返回了费用 | provider 未映射 `usage.cost` / `gateway_cost` | `Usage` 增加可选 `costUsd`，网关上报值优先于本地价目表；`/cost` 显示真实 `$0.0093` |
+| 7 | 模型不知道工作目录，也不读取项目规则（P0：FR-051/FR-083 未落地） | CLI 未向 agent 传 `context` | 新增 `buildCliContext`：cwd/平台/日期 + 用户级 `~/.liwencode/AGENTS.md` + 仓库根 `AGENTS.md`（兼容 `CLAUDE.md`，`LIWEN_INSTRUCTION_FILES` 可配置），接入 TUI / REPL / `-p`；新增 5 项单测 |
+
+### 11.3 真实编码任务（C++ 单文件）
+
+提示词要求在工作区 `test/` 下实现单文件命令行计算器（+ - * /、除零与非法输入、非零退出码），写完后用 g++ 编译并至少跑 3 个用例。结果：
+
+- 25 次模型请求、32 张过程截图，`/exit` 退出码 0；**0 次工具参数错误**。
+- 生成的 `test/calculator.cpp` 通过 `g++ -std=c++17 -O2 -Wall` 编译，实测：`3 + 4 = 7`（退出 0）、`10 / 0`（错误信息 + 非零退出）、`3 + abc`（带位置的错误信息）、`1e308 * 10`（溢出检测）。
+- 流式反馈：思考行（暗色 `⋯`）与正文连续成段；工具行 `⚙ write/read/bash` + `✔/✖` 即时出现；最终中文 Markdown 表格在 TUI 中正常对齐。
+- 用量：25 requests · 216.6k in / 12.5k out · 缓存命中 46% · 费用 $0.0093；状态栏上下文 14.5k 与 `/status` 面板 14.9k 一致（估算误差 <3%）。
+- 权限审批（`--HuangAura`）：写操作弹出 `⚠ 权限请求`，`y` 本次允许后 write 执行、read 自动放行，最终回复正常。截图：`test/tui-real/02-code/`、`03-perm/`。
+
+## 12. 已知限制（v0.1 范围外，按 WBS 顺延）
+
+- 真实模型已验证 OpenAI ChatCompletion 一条链路（含工具调用/流式/思考/权限/费用）；OpenAI Responses 与 Gemini 原生适配器仍为 M2 规划，`/setup` 可保存配置但调用会抛 `LW-PRV-010`。
+- TUI 会话恢复 CLI、自动压缩、MCP、决策层、三角色编排未实现（M2~M4 范围）。
 - 评测集为 10 项种子，G1 要求的 30 项任务集在 M1 后续扩充。
+- 子目录级 AGENTS.md 惰性加载（DD-6）未实现；当前注入用户级 + 仓库根。
+- 同步大文件读取期间 UI 短暂阻塞（v0.1 已知限制）。
 - CI 工作流已就绪（.github/workflows/ci.yml，ubuntu/macos × Node 22），推送后首跑验证。
 
-## 12. 复现命令
+## 13. 复现命令
 
 ```bash
 corepack pnpm install
 corepack pnpm typecheck      # 0 errors
-corepack pnpm test           # 211 passed
-corepack pnpm lint:registry  # 78 codes OK
+corepack pnpm test           # 248 passed
+corepack pnpm lint:registry  # 79 codes OK
 corepack pnpm test:evals     # 10/10
 
 # 交互模式冒烟（无需密钥）
