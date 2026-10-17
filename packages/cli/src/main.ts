@@ -5,7 +5,7 @@ import { EXIT_OK, EXIT_USAGE, runPrint } from './run.js';
 import { formatDoctor, runDoctor } from './doctor.js';
 import { runInteractive } from './interactive.js';
 import { runTui } from './tui/tui.js';
-import { loadSecretsIntoEnv } from './model-config.js';
+import { activateAgentGroup, loadSecretsIntoEnv } from './model-config.js';
 
 export const VERSION = 'liwen v0.1.0 (LIWENCode internal, M0+M1)';
 
@@ -58,6 +58,14 @@ async function main(argv: string[]): Promise<number> {
     }
     process.stdout.write(`${JSON.stringify(config, null, 2)}\n`);
     return EXIT_OK;
+  }
+
+  // --agents <name>: 激活已保存的 agent 群（common 角色作为执行模型）
+  if (args.agents !== undefined && args.model === undefined) {
+    const res = activateAgentGroup(args.agents);
+    if (!res.ok) {
+      process.stderr.write(`warning: agent group '${args.agents}' not found (LW-CLI-001). Run /set-agents after entering liwen.\n`);
+    }
   }
 
   // agent run

@@ -47,6 +47,7 @@
 | `--max-budget-usd` | 金额 | 费用上限，触发出码 4 |
 | `--cwd` | 路径 | 工作区目录 |
 | `--no-boot` | — | 跳过 TUI 启动动画（终端 < 40 列或 < 12 行时自动跳过） |
+| `--agents` | 群名 | 启动时激活已保存的 agent 群（common 角色成为执行模型，配合 /set-agents 使用） |
 | `--output-format` | `text` / `json` / `stream-json` | 仅 `-p` 模式：结果格式 |
 | `--verbose` | — | 诊断信息走 stderr |
 
@@ -149,6 +150,8 @@ TTY 下 `liwen` 进入自研纯 ANSI TUI（零第三方依赖，不依赖 Ink/Re
 
 ### 会话与信息
 
+> **信息类命令均以 TUI 面板输出**（圆角框、对齐表格、进度条、彩色徽标；REPL 下同样逐行渲染）：`/status`（会话 + 上下文进度条）、`/cost`（输入/输出/缓存 token 占比条 + 计费）、`/tools`（工具表）、`/permissions`（档位徽标 + 规则表）、`/doctor`（诊断表）、`/model`（当前模型 + 内置 Provider + 自定义档案 + agent 群三段式）、`/manage`（档案表）、`/help`（命令表 + 输入语法）。
+
 | 命令 | 说明 |
 | --- | --- |
 | `/help [命令]` | 全部命令一览，或单条详细用法 |
@@ -158,12 +161,40 @@ TTY 下 `liwen` 进入自研纯 ANSI TUI（零第三方依赖，不依赖 Ink/Re
 | `/tools` | 已注册工具及风险级别（read/write/exec）、是否只读、并发安全 |
 | `/doctor` | 与 `liwen doctor` 相同的 12 项诊断 |
 | `/setup` | **模型配置向导**（TUI）：进度线引导逐步填写模型名称→请求地址→API Key→API 协议→认证字段→档案名，最后保存（见下节） |
+| `/set-agents` | **agent 群配置向导**（TUI）：新建群或修改已有群，为 hyaki（总结）/ sota（思考）/ common（执行）三角色各选一个模型（见下节） |
+| `/setting` | 快速修改**当前激活 agent 群**的三角色配置（等价编辑当前群） |
 | `/manage` | **管理自定义模型档案**（TUI）：列出已存档案，选择后可查看详情、编辑（重跑向导、空输入沿用现值）或删除 |
+| `/agents` | **多智能体工作模式**（M3+）：按已配置的 agent 群分派三角色；当前显示群清单与配置入口 |
 | `/clear` | 清空对话历史，开启新会话 |
 | `/compact` | 手动压缩：清理旧工具结果（保留最近 6 轮），显示前后 token 对比 |
 | `/resume [id]` | 列出最近 5 个会话；`/resume <id>` 恢复指定会话（下一条消息接续其历史） |
 | `/exit` `/quit` | 退出 |
 
+
+### agent 群：`/set-agents` · `/setting` · `/agents`（TUI）
+
+以**差异化模型配置**降本：同一个群内三个角色分工、各绑一个模型，甚至可以让同一模型兼任多个角色（低成本场景三角色全用同一模型即可）。
+
+| 角色 | 职责 | 建议模型 |
+| --- | --- | --- |
+| **hyaki** | 大规模文本输入与总结 | 低成本（如 deepseek-chat） |
+| **sota** | 思考、规划与评审 | 高能力（如 claude-sonnet-4） |
+| **common** | 落实与执行 | 均衡（如 deepseek-chat） |
+
+**`/set-agents`** 进入向导（与 /setup 同款进度线风格）：
+
+1. 若已有群：先选目标 —— 已有群（进入修改、角色预填并高亮当前模型）或 `＋ create a new group`
+2. 群名（自行命名；修改时回车沿用）
+3. 依次为 hyaki / sota / common 选择模型 —— 选项来自**当前已有的模型**：内置 Provider 目录（`mock:default`、`deepseek:deepseek-chat`、`anthropic:claude-sonnet-4` …）与 `/setup` 创建的自定义档案（`@档案名`），↑↓ 选择、Enter 确认
+4. 保存后询问 `设为当前 agent 群? [Y/n]`；确认即激活
+
+**激活语义**（在 /agents 模式落地前即可直接使用该群工作）：主工作模型取 **common** 角色，会话照常执行；`activeAgentGroup` 一并记录，M3 的 `/agents` 编排模式启用后将自动按群分派 hyaki/sota/common。
+
+- `/setting`：等价于编辑当前激活的群（三角色配置预填，回车沿用）
+- `/model use @群名`：随时切换群（与 `@档案名` 同名时档案优先）
+- `liwen --agents <群名>`：启动时直接激活
+- `/agents`：M3 工作模式入口，当前展示群清单（● 标记激活群）与配置引导
+- `/model` 面板中 agent 群以 `hyaki / sota / common` 三列展示，可一眼看清差异化配置
 
 ### 自定义模型：`/setup` 向导 与 `/manage` 管理（TUI）
 

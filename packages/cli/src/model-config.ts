@@ -124,6 +124,98 @@ export interface UserConfigFile {
   permissionMode?: 'strict' | 'default' | 'acceptEdits' | 'plan' | 'bypass';
   /** /setup 创建的自定义模型档案，key = 请求名称（profile 名） */
   models?: Record<string, ModelProfile>;
+  /** /set-agents 创建的 agent 群，key = 群名 */
+  agentGroups?: Record<string, AgentGroup>;
+  /** 当前激活的 agent 群（/model use @群名 或 --agents 设置） */
+  activeAgentGroup?: string;
+}
+
+// ── agent 群（/set-agents · /setting · /model） ──────────────────────────
+
+/** 三角色：hyaki 提取总结（低成本）/ sota 思考规划（高能力）/ common 落实执行（均衡） */
+export type AgentRole = 'hyaki' | 'sota' | 'common';
+
+export const AGENT_ROLES: readonly AgentRole[] = ['hyaki', 'sota', 'common'];
+
+export const ROLE_META: Readonly<Record<AgentRole, { title: string; color: number; desc: string }>> = {
+  hyaki: { title: 'hyaki', color: 45, desc: 'large text intake & summarization (low-cost model advised)' },
+  sota: { title: 'sota', color: 213, desc: 'thinking, planning & review (high-capability model advised)' },
+  common: { title: 'common', color: 46, desc: 'implementation & execution (balanced model advised)' },
+};
+
+/** 一个 agent 群：三个角色各自绑定模型引用（"provider:model" 或 "@profile"）。
+ * 允许同一模型担任多个角色（低成本场景可三角色同一模型）。 */
+export interface AgentGroup {
+  hyaki: string;
+  sota: string;
+  common: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export function validGroupName(name: string): boolean {
+  return validProfileName(name);
+}
+
+export function listAgentGroups(home?: string): Record<string, AgentGroup> {
+  return readUserConfig(home).agentGroups ?? {};
+}
+
+export function getAgentGroup(name: string, home?: string): AgentGroup | undefined {
+  return readUserConfig(home).agentGroups?.[name];
+}
+
+export function saveAgentGroup(name: string, group: AgentGroup, home?: string): void {
+  const config = readUserConfig(home);
+  config.agentGroups = config.agentGroups ?? {};
+  config.agentGroups[name] = group;
+  writeUserConfig(config, home);
+}
+
+export function deleteAgentGroup(name: string, home?: string): boolean {
+  const config = readUserConfig(home);
+  if (config.agentGroups?.[name] === undefined) return false;
+  delete config.agentGroups[name];
+  if (config.activeAgentGroup === name) delete config.activeAgentGroup;
+  writeUserConfig(config, home);
+  return true;
+}
+
+/** 激活群：主工作模型取 common 角色（执行面），并记录 activeAgentGroup 供未来 /agents 模式使用 */
+export function activateAgentGroup(name: string, home?: string): { ok: boolean; common?: string } {
+  const group = getAgentGroup(name, home);
+  if (group === undefined) return { ok: false };
+  const config = readUserConfig(home);
+  config.activeAgentGroup = name;
+  config.model = refToModelConfig(group.common);
+  writeUserConfig(config, home);
+  return { ok: true, common: group.common };
+}
+
+export function deactivateAgentGroup(home?: string): void {
+  const config = readUserConfig(home);
+  delete config.activeAgentGroup;
+  writeUserConfig(config, home);
+}
+
+/** 模型引用 → UserModelConfig（"provider:model" 或 "@profile"） */
+export function refToModelConfig(ref: string): UserModelConfig {
+  if (ref.startsWith('@')) {
+    const profile = getProfile(ref.slice(1));
+    return { provider: ref, name: profile?.model ?? 'default' };
+  }
+  const idx = ref.indexOf(':');
+  return idx > 0 ? { provider: ref.slice(0, idx), name: ref.slice(idx + 1) } : { provider: 'mock', name: 'default' };
+}
+
+/** 可选模型引用清单：内置 Provider 全部模型 + 自定义档案（供向导选择） */
+export function availableModelRefs(home?: string): string[] {
+  const refs: string[] = [];
+  for (const entry of PROVIDER_CATALOG) {
+    for (const m of entry.models) refs.push(`${entry.id}:${m}`);
+  }
+  for (const name of Object.keys(listProfiles(home))) refs.push(`@${name}`);
+  return refs;
 }
 
 export function readUserConfig(home?: string): UserConfigFile {

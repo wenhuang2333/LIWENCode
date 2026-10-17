@@ -82,7 +82,43 @@ import {
   PROTOCOL_LABELS,
   AUTH_FIELD_LABELS,
   type ModelProfile,
+  AGENT_ROLES,
+  ROLE_META,
+  activateAgentGroup,
+  availableModelRefs,
+  deleteAgentGroup,
+  getAgentGroup,
+  listAgentGroups,
+  refToModelConfig,
+  saveAgentGroup,
+  type AgentGroup,
+  type AgentRole,
 } from '../model-config.js';
+import {
+  groupSummary,
+  moveSelection,
+  newGroupWizard,
+  optionsOf as groupOptions,
+  questionOf as groupQuestion,
+  renderGroupWizard,
+  setGroupPrefillProvider,
+  setGroupWizardDeps,
+  submitStep as submitGroupStep,
+  isSelectStep as groupIsSelect,
+  type GroupWizardState,
+} from './agent-wizard.js';
+import { C, panel, section, table } from './panel.js';
+import {
+  costPanel,
+  doctorPanel,
+  helpPanel,
+  managePanel,
+  modelPanel,
+  permissionsPanel,
+  statusPanel,
+  toolsPanel,
+} from '../views.js';
+import { COMMAND_DOCS } from '../slash.js';
 
 const ANSI = {
   dim: (s: string) => `\x1b[2m${s}\x1b[22m`,
@@ -114,6 +150,8 @@ export interface TuiOptions {
 interface UsageTotals {
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
   costUsd: number;
   requests: number;
 }
@@ -158,7 +196,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
   const redactor = new Redactor();
   const sessionStore = new FileSessionStore(runtime, `${liwenHome()}/sessions`, String(projectHashOf(cwd)));
   const { tools } = createBuiltinTools();
-  const usageTotals: UsageTotals = { inputTokens: 0, outputTokens: 0, costUsd: 0, requests: 0 };
+  const usageTotals: UsageTotals = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, requests: 0 };
 
   await playBoot(opts.args.noBoot === true);
 
@@ -204,6 +242,16 @@ export async function runTui(opts: TuiOptions): Promise<number> {
   // /setup 向导（激活时占用输入框，选择步复用 ↑↓ 导航）
   let wizard: WizardState | null = null;
   setExistingNamesProvider(() => Object.keys(listProfiles()));
+  // /set-agents · /setting agent 群向导（与 /setup 向导互斥，共用输入框）
+  let groupWizard: GroupWizardState | null = null;
+  setGroupWizardDeps({
+    groupNames: () => Object.keys(listAgentGroups()),
+    modelRefs: () => availableModelRefs(),
+  });
+  setGroupPrefillProvider((name) => {
+    const g = getAgentGroup(name);
+    return g !== undefined ? { hyaki: g.hyaki, sota: g.sota, common: g.common } : {};
+  });
 
   function safeContextWindow(s: ProviderSpec): number | null {
     try {
@@ -263,6 +311,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     if (mode.kind === 'permission') return `允许执行? ${ANSI.yellow('[y]本次允许 / [s]本次会话均允许 / [n]拒绝 (默认 n)')}`;
     if (mode.kind === 'prompt') return ANSI.bold(promptQuestion);
     if (wizard !== null) return ANSI.bold(wizardQuestion(wizard));
+    if (groupWizard !== null) return ANSI.bold(groupQuestion(groupWizard));
     const tier = permissionModeShort(agent.engine.mode);
     const busyTag = busy ? ANSI.magenta(' · 处理中…') : '';
     const queued = queuedInput !== null ? ANSI.dim(' · 已排队 1 条') : '';
@@ -315,9 +364,11 @@ export async function runTui(opts: TuiOptions): Promise<number> {
 
   /** 根据编辑器内容刷新联想候选（仅主输入模式；向导激活时不联想） */
   function updatePalette(): void {
-    if (mode.kind !== 'input' || wizard !== null) {
+    if (mode.kind !== 'input' || wizard !== null || groupWizard !== null) {
       paletteHints = [];
-      editor.setNavCapture(wizard !== null && wizardIsSelect(wizard));
+      editor.setNavCapture(
+        (wizard !== null && wizardIsSelect(wizard)) || (groupWizard !== null && groupIsSelect(groupWizard)),
+      );
       return;
     }
     paletteHints = suggestCommands(editor.text());
@@ -361,6 +412,11 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     // /setup 向导（Vite 式进度线）
     if (wizard !== null) {
       lines.push(...renderWizard(wizard, Math.min(cols, 64)));
+    }
+
+    // /set-agents agent 群向导（三角色进度线）
+    if (groupWizard !== null) {
+      lines.push(...renderGroupWizard(groupWizard, Math.min(cols, 68)));
     }
 
     // 指令联想弹层
@@ -520,6 +576,10 @@ export async function runTui(opts: TuiOptions): Promise<number> {
           handleWizardSubmit(ev.text);
           continue;
         }
+        if (groupWizard !== null) {
+          handleGroupSubmit(ev.text);
+          continue;
+        }
         handleSubmit(ev.text);
       } else if (ev.type === 'interrupt') {
         if (wizard !== null) {
@@ -530,6 +590,14 @@ export async function runTui(opts: TuiOptions): Promise<number> {
           redraw();
           continue;
         }
+        if (groupWizard !== null) {
+          groupWizard = null;
+          editor.clear();
+          editor.setNavCapture(false);
+          printAbove(`${ANSI.yellow('已取消 /set-agents 向导。')}\n`);
+          redraw();
+          continue;
+        }
         handleInterrupt();
       } else if (ev.type === 'eof') {
         if (mode.kind === 'input' && !busy && editor.isEmpty()) {
@@ -537,8 +605,11 @@ export async function runTui(opts: TuiOptions): Promise<number> {
           cleanup(0);
         }
       } else if (ev.type === 'nav') {
-        // 向导选择步优先；否则指令联想选择（均循环滚动）
-        if (wizard !== null && wizardIsSelect(wizard)) {
+        // 群向导选择步 → /setup 向导选择步 → 指令联想（均循环滚动）
+        if (groupWizard !== null && groupIsSelect(groupWizard)) {
+          groupWizard = moveSelection(groupWizard, ev.dir === 'up' ? -1 : 1);
+          redraw();
+        } else if (wizard !== null && wizardIsSelect(wizard)) {
           const n = selectOptions(wizard).length;
           const delta = ev.dir === 'up' ? -1 : 1;
           wizard = { ...wizard, selIdx: (wizard.selIdx + delta + n) % n };
@@ -555,13 +626,21 @@ export async function runTui(opts: TuiOptions): Promise<number> {
           editor.setNavCapture(false);
           printAbove(`${ANSI.yellow('已取消 /setup 向导。')}\n`);
           redraw();
+        } else if (groupWizard !== null) {
+          groupWizard = null;
+          editor.clear();
+          editor.setNavCapture(false);
+          printAbove(`${ANSI.yellow('已取消 /set-agents 向导。')}\n`);
+          redraw();
         } else if (paletteHints.length > 0) {
           paletteHints = [];
           editor.setNavCapture(false);
           redraw();
         }
       } else if (ev.type === 'tab') {
-        if (wizard !== null) {
+        if (groupWizard !== null) {
+          handleGroupSubmit('');
+        } else if (wizard !== null) {
           // 向导中 Tab 等同确认当前步
           handleWizardSubmit();
         } else if (paletteHints.length > 0) {
@@ -644,6 +723,91 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     editor.clear();
     editor.setNavCapture(wizardIsSelect(wizard));
     redraw();
+  }
+
+  // ── /set-agents · /setting：agent 群向导 ─────────────────────────────
+
+  /** 启动 agent 群向导；editing 为已有群名（改群），缺省为新建/选择 */
+  function startGroupWizard(editing?: string): void {
+    welcomeFrozen = true;
+    const prefill =
+      editing !== undefined
+        ? (() => {
+            const g = getAgentGroup(editing);
+            return g !== undefined ? { hyaki: g.hyaki, sota: g.sota, common: g.common } : undefined;
+          })()
+        : undefined;
+    groupWizard = newGroupWizard(editing, prefill);
+    editor.clear();
+    editor.setNavCapture(groupIsSelect(groupWizard));
+    redraw();
+  }
+
+  /** 群向导步进；text 为空回退编辑器（Tab 路径；Enter 路径必须传 ev.text） */
+  function handleGroupSubmit(text?: string): void {
+    if (groupWizard === null) return;
+    const { state: ns, done } = submitGroupStep(groupWizard, text ?? editor.text());
+    editor.clear();
+    groupWizard = ns;
+    if (done) {
+      void finishGroupWizard(ns);
+      return;
+    }
+    editor.setNavCapture(groupIsSelect(ns));
+    redraw();
+  }
+
+  async function finishGroupWizard(state: GroupWizardState): Promise<void> {
+    const a = state.answers;
+    const name = a.name ?? state.editing ?? '';
+    groupWizard = null;
+    editor.setNavCapture(false);
+    const existing = getAgentGroup(name);
+    const group: AgentGroup = {
+      hyaki: a.hyaki ?? '',
+      sota: a.sota ?? '',
+      common: a.common ?? '',
+      createdAt: existing?.createdAt ?? Date.now(),
+      updatedAt: Date.now(),
+    };
+    saveAgentGroup(name, group);
+    printAbove(
+      [
+        `${ANSI.green(`✔ agent 群 '${name}' 已保存`)}`,
+        '',
+        ...groupSummary(name, a),
+        '',
+        ANSI.dim('  同一模型可担任多个角色（低成本场景三角色同一模型即可）；'),
+        ANSI.dim('  /agents 三角色编排模式规划于 M3，当前 common 角色作为执行模型直接可用。'),
+      ].join('\n') + '\n',
+    );
+    const ask = makePrompt();
+    const activate = (await ask('设为当前 agent 群? [Y/n]: ')).trim().toLowerCase();
+    if (activate === '' || activate === 'y') {
+      activateGroup(name);
+    } else {
+      printAbove(`${ANSI.dim(`保持当前模型；之后可用 /model use @${name} 启用该群。`)}\n`);
+    }
+    redraw();
+  }
+
+  /** 激活 agent 群：主工作模型取 common 角色，并记录 activeAgentGroup */
+  function activateGroup(name: string): void {
+    const res = activateAgentGroup(name);
+    if (!res.ok || res.common === undefined) {
+      printAbove(`${ANSI.yellow(`agent 群 '${name}' 不存在。/set-agents 创建。`)}\n`);
+      return;
+    }
+    const mc = refToModelConfig(res.common);
+    switchModel(mc.provider, mc.name);
+    printAbove(
+      `${ANSI.green(`已激活 agent 群 '${name}'`)}${ANSI.dim(`：执行模型 ${res.common}（hyaki/sota 配置已保存，M3 编排模式启用后自动分派）`)}\n`,
+    );
+  }
+
+  /** 面板输出辅助（views.ts 的行数组 → printAbove） */
+  function printPanelLines(lines: string[]): void {
+    printAbove(`${lines.join('\n')}\n`);
   }
 
   function handleSubmit(text: string): void {
@@ -810,6 +974,8 @@ export async function runTui(opts: TuiOptions): Promise<number> {
         case 'usage': {
           usageTotals.inputTokens += ev.usage.inputTokens;
           usageTotals.outputTokens += ev.usage.outputTokens;
+          usageTotals.cacheReadTokens += ev.usage.cacheReadTokens ?? 0;
+          usageTotals.cacheWriteTokens += ev.usage.cacheWriteTokens ?? 0;
           usageTotals.requests += 1;
           if (ev.costUsd !== undefined) usageTotals.costUsd += ev.costUsd;
           break;
@@ -847,7 +1013,16 @@ export async function runTui(opts: TuiOptions): Promise<number> {
   async function handleSlash(cmd: { name: string; args: string[] }): Promise<void> {
     switch (cmd.name) {
       case '/help':
-        printAbove(`${helpText(cmd.args[0])}\n`);
+        if (cmd.args[0] !== undefined) {
+          printAbove(`${helpText(cmd.args[0])}\n`);
+        } else {
+          printPanelLines(
+            helpPanel(
+              COMMAND_DOCS.filter((c) => c.since === 'v0.1').map((c) => ({ usage: c.usage, summary: c.summary })),
+              COMMAND_DOCS.filter((c) => c.since !== 'v0.1').map((c) => ({ name: c.name, summary: c.summary, since: c.since })),
+            ),
+          );
+        }
         return;
       case '/exit':
       case '/quit':
@@ -857,7 +1032,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
         return;
       case '/permission':
       case '/permissions':
-        cmdPermissions(cmd.args, cmd.name);
+        await cmdPermissions(cmd.args, cmd.name);
         return;
       case '/status':
         cmdStatus();
@@ -879,7 +1054,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
         await cmdResume(cmd.args);
         return;
       case '/doctor':
-        printAbove(`${formatDoctor(runDoctor(cwd))}\n`);
+        printPanelLines(doctorPanel(runDoctor(cwd)));
         return;
       case '/setup':
         startWizard();
@@ -887,12 +1062,52 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       case '/manage':
         await cmdManage(cmd.args);
         return;
-      case '/agents':
+      case '/set-agents':
+        startGroupWizard();
+        return;
+      case '/setting': {
+        const active = readUserConfig().activeAgentGroup;
+        if (active === undefined) {
+          printAbove(`${ANSI.yellow('当前没有激活的 agent 群。先用 /set-agents 新建或选择一个群。')}\n`);
+          return;
+        }
+        startGroupWizard(active);
+        return;
+      }
+      case '/agents': {
+        const groups = listAgentGroups();
+        const names = Object.keys(groups);
+        const active = readUserConfig().activeAgentGroup;
+        printPanelLines(
+          panel('agents (work mode · M3)', [
+            section('three-role orchestration'),
+            C.dim('hyaki   summarize large inputs   low-cost model'),
+            C.dim('sota    think, plan, review      high-capability model'),
+            C.dim('common  implement & execute      balanced model'),
+            '',
+            section(`configured groups (${names.length})`),
+            ...(names.length > 0
+              ? table(
+                  ['group', 'hyaki', 'sota', 'common'],
+                  names.map((n) => {
+                    const g = groups[n]!;
+                    return [`${n === active ? C.green('●') : C.dim('○')} @${n}`, g.hyaki, g.sota, g.common];
+                  }),
+                )
+              : [C.dim('(none — run /set-agents to build one)')]),
+            '',
+            C.yellow('the /agents work mode itself ships in M3.'),
+            C.dim('until then, activating a group drives the session with its common model.'),
+            C.dim('configure: /set-agents · quick-edit active: /setting · switch: /model use @group'),
+          ]),
+        );
+        return;
+      }
       case '/mcp':
       case '/goal':
       case '/rewind': {
-        const doc = { '/agents': '三角色编排（hyaki/sota/common）', '/mcp': 'MCP 服务器管理', '/goal': '目标与确定性验收', '/rewind': '检查点回滚' }[cmd.name];
-        printAbove(`${ANSI.yellow(`${cmd.name} 属于后续里程碑（M2+），当前版本为占位。用 /help 查看可用命令。`)}\n${ANSI.dim(`  计划功能：${doc}`)}\n`);
+        const doc = { '/mcp': 'MCP 服务器管理', '/goal': '目标与确定性验收', '/rewind': '检查点回滚' }[cmd.name];
+        printAbove(`${ANSI.yellow(`${cmd.name} 属于后续里程碑（M2+），当前版本为占位。用 /help 查看全部命令。`)}\n${ANSI.dim(`  计划功能：${doc}`)}\n`);
         return;
       }
       default:
@@ -903,44 +1118,42 @@ export async function runTui(opts: TuiOptions): Promise<number> {
 
   async function cmdModel(args: string[]): Promise<void> {
     const sub = args[0];
-    if (sub === undefined || sub === 'show') {
-      const entry = catalogEntry(spec.provider);
-      const key = entry !== undefined && entry.apiKeyEnv !== undefined ? keyStatusOf(entry) : undefined;
-      printAbove(
-        [
-          `当前模型: ${ANSI.bold(`${spec.provider}:${spec.model}`)}`,
-          entry !== undefined ? `  端点: ${entry.baseUrl === '' ? '(离线)' : entry.baseUrl}` : '',
-          key !== undefined ? `  密钥: ${key.set ? `${entry?.apiKeyEnv} 已设置（${key.source === 'env-file' ? '~/.liwencode/env' : '进程环境变量'}）` : `${entry?.apiKeyEnv} 未设置`}` : '  密钥: (无需)',
-          '',
-          '用法: /model list | /model use <provider:model> | /model config [provider]',
-        ]
-          .filter((l) => l !== '')
-          .join('\n') + '\n',
-      );
-      return;
-    }
-    if (sub === 'list') {
-      const rows = PROVIDER_CATALOG.map((p) => {
-        const key = p.apiKeyEnv !== undefined ? keyStatusOf(p) : { set: true, source: 'none' as const };
-        return `  ${(p.id + ':' + p.models.join('|')).padEnd(44)} ${p.label}  密钥: ${key.set ? ANSI.green('✔') : ANSI.yellow('✘')}`;
-      });
-      printAbove(`Provider 目录：\n${rows.join('\n')}\n  切换: /model use deepseek:deepseek-chat\n`);
+    if (sub === undefined || sub === 'show' || sub === 'list') {
+      printModelPanel();
       return;
     }
     if (sub === 'use') {
       const target = args[1];
-      if (target === undefined || !target.includes(':')) {
-        printAbove(`${ANSI.yellow('用法: /model use <provider:model>，例如 /model use deepseek:deepseek-chat')}\n`);
+      if (target === undefined) {
+        printAbove(`${ANSI.yellow('用法: /model use <provider:model | @profile | @group>，例如 /model use deepseek:deepseek-chat 或 /model use @my-team')}\n`);
+        return;
+      }
+      if (target.startsWith('@')) {
+        const name = target.slice(1);
+        if (getAgentGroup(name) !== undefined) {
+          activateGroup(name);
+          return;
+        }
+        const profile = listProfiles()[name];
+        if (profile !== undefined) {
+          switchModel(`@${name}`, profile.model);
+          return;
+        }
+        printAbove(`${ANSI.red(`'${target}' 不是已保存的模型档案或 agent 群。/model 查看清单。`)}\n`);
+        return;
+      }
+      if (!target.includes(':')) {
+        printAbove(`${ANSI.yellow('用法: /model use <provider:model | @profile | @group>')}\n`);
         return;
       }
       const [providerId, name] = target.split(':');
       const entry = catalogEntry(providerId ?? '');
       if (entry === undefined) {
-        printAbove(`${ANSI.red(`未知 provider '${providerId}'。/model list 查看目录。`)}\n`);
+        printAbove(`${ANSI.red(`未知 provider '${providerId}'。/model 查看目录。`)}\n`);
         return;
       }
       if (entry.needsKey && !keyStatusOf(entry).set) {
-        printAbove(`${ANSI.yellow(`${providerId} 需要密钥（${entry.apiKeyEnv}）。先运行 /model config ${providerId}`)}\n`);
+        printAbove(`${ANSI.yellow(`${providerId} 需要密钥（${entry.apiKeyEnv}）。先运行 /setup 或 /model config ${providerId}`)}\n`);
         return;
       }
       switchModel(providerId ?? 'mock', name ?? 'default');
@@ -950,7 +1163,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       await cmdModelConfig(args[1]);
       return;
     }
-    printAbove(`${ANSI.yellow('用法: /model [list|use|config|show]')}\n`);
+    printAbove(`${ANSI.yellow('用法: /model [list | use <provider:model|@profile|@group> | config]')}\n`);
   }
 
   function switchModel(providerId: string, name: string): void {
@@ -964,6 +1177,30 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     tracker.setModel({ model: `${spec.provider}:${spec.model}`, contextWindow: safeContextWindow(spec) });
     writeUserConfig({ ...readUserConfig(), model: { provider: spec.provider, name: spec.model } });
     printAbove(`${ANSI.green(`已切换到 ${spec.provider}:${spec.model}（已保存为默认，历史保留）。`)}\n`);
+  }
+
+  /** /model 面板：当前模型 + 内置 Provider + 自定义档案 + agent 群 */
+  function printModelPanel(): void {
+    const config = readUserConfig();
+    printPanelLines(
+      modelPanel({
+        current: `${spec.provider}:${spec.model}`,
+        activeGroup: config.activeAgentGroup,
+        catalog: PROVIDER_CATALOG.map((p) => ({
+          id: p.id,
+          label: p.label,
+          models: p.models,
+          keySet: p.apiKeyEnv === undefined ? true : keyStatusOf(p).set,
+        })),
+        profiles: Object.entries(listProfiles()).map(([name, prof]) => ({
+          name,
+          protocol: PROTOCOL_LABELS[prof.protocol],
+          model: prof.model,
+          keySet: profileKeyStatus(prof).set,
+        })),
+        groups: Object.entries(listAgentGroups()).map(([name, g]) => ({ name, hyaki: g.hyaki, sota: g.sota, common: g.common })),
+      }),
+    );
   }
 
   async function cmdModelConfig(providerId?: string): Promise<void> {
@@ -1007,79 +1244,123 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     switchModel(entry.id, model);
   }
 
-  function cmdPermissions(args: string[], invokedAs = '/permissions'): void {
-    if (args.length === 0) {
-      const rules = sessionRules.length > 0
-        ? sessionRules.map((r) => `  ${r.effect.padEnd(5)} ${r.tool}${r.match?.command !== undefined ? `  cmd=${r.match.command}` : ''}${r.match?.path !== undefined ? `  path=${r.match.path}` : ''}`).join('\n')
-        : '  (无临时规则)';
-      printAbove(
-        [
-          `权限模式: ${ANSI.bold(agent.engine.mode)}（当前档位: ${permissionModeShort(agent.engine.mode)}）`,
-          ...permissionTierPanel(agent.engine.mode),
-          '本会话临时规则:',
-          rules,
-          `调整: ${invokedAs} <档位> | ${invokedAs} mode <m> | ${invokedAs} allow|deny <tool>`,
-        ].join('\n') + '\n',
-      );
-      return;
-    }
-    if (args[0] === 'mode') {
-      const modeArg = args[1];
-      if (modeArg !== 'strict' && modeArg !== 'default' && modeArg !== 'acceptEdits' && modeArg !== 'plan' && modeArg !== 'bypass') {
-        printAbove(`${ANSI.yellow('模式必须为 strict | default | acceptEdits | plan | bypass')}\n`);
+  async function cmdPermissions(args: string[], invokedAs = '/permissions'): Promise<void> {
+    // ── 快路径：参数直接生效（/permission HuangAura · /permissions mode plan · allow/deny） ──
+    if (args.length > 0) {
+      if (args[0] === 'mode' && args[1] !== undefined) {
+        const modeArg = args[1];
+        if (modeArg !== 'strict' && modeArg !== 'default' && modeArg !== 'acceptEdits' && modeArg !== 'plan' && modeArg !== 'bypass') {
+          printAbove(`${ANSI.yellow('模式必须为 strict | default | acceptEdits | plan | bypass')}\n`);
+          return;
+        }
+        agent.engine.setMode(modeArg);
+        permissionMode = modeArg;
+        printAbove(`${ANSI.green(`权限模式已切换为 ${modeArg}。`)}\n`);
         return;
       }
-      agent.engine.setMode(modeArg);
-      permissionMode = modeArg;
-      printAbove(`${ANSI.green(`权限模式已切换为 ${modeArg}。`)}\n`);
+      if ((args[0] === 'allow' || args[0] === 'deny') && args[1] !== undefined) {
+        addSessionRule(args[0], args[1]);
+        return;
+      }
+      const tier = parsePermissionArg(args[0]!);
+      if (tier !== null) {
+        agent.engine.setMode(tier.mode);
+        permissionMode = tier.mode;
+        printAbove(
+          `${ANSI.green(`权限档位已切换为 ${tier.key}（${permissionModeShort(tier.mode)}）。`)}${ANSI.dim('仅本次会话；启动默认用 --HuangAura / --WenNova 或配置 permissionMode')}\n`,
+        );
+        return;
+      }
+      printAbove(`${ANSI.yellow(`用法: ${invokedAs} [strict|HuangAura|WenNova|acceptEdits|plan] | ${invokedAs} mode <m> | ${invokedAs} allow|deny <tool>`)}${ANSI.dim('（无参数进入问答引导）')}\n`);
       return;
     }
-    if ((args[0] === 'allow' || args[0] === 'deny') && args[1] !== undefined) {
-      const rule: PermissionRule = { effect: args[0], tool: args[1], source: 'user' };
-      sessionRules.push(rule);
-      agent.engine.addRules([rule]);
-      printAbove(`${ANSI.green(`已添加 ${args[0]} 规则: ${args[1]}（仅本次会话）。`)}\n`);
-      return;
+
+    // ── 无参数：面板 + 逐项问答引导 ──
+    printPanelLines(permissionsPanel(agent.engine.mode, permissionModeShort(agent.engine.mode), permRuleRows()));
+    const ask = makePrompt();
+    const modeAns = (await ask('switch tier? strict / HuangAura / WenNova / acceptEdits / plan (empty = keep): ')).trim();
+    if (modeAns !== '') {
+      const parsed = parsePermissionArg(modeAns);
+      if (parsed === null) {
+        printAbove(`${ANSI.yellow(`无法识别 '${modeAns}'，档位未变更。`)}\n`);
+      } else {
+        agent.engine.setMode(parsed.mode);
+        permissionMode = parsed.mode;
+        printAbove(`${ANSI.green(`权限档位已切换为 ${parsed.key}（${permissionModeShort(parsed.mode)}）。`)}\n`);
+      }
     }
-    // 直接切换档位：/permission strict | HuangAura | WenNova（大小写/连字符不敏感）
-    const tier = parsePermissionArg(args[0]!);
-    if (tier !== null) {
-      agent.engine.setMode(tier.mode);
-      permissionMode = tier.mode;
-      printAbove(
-        `${ANSI.green(`权限档位已切换为 ${tier.key}（${permissionModeShort(tier.mode)}）。`)}${ANSI.dim('仅本次会话；启动默认用 --HuangAura / --WenNova 或配置 permissionMode')}\n`,
-      );
-      return;
-    }
-    printAbove(`${ANSI.yellow(`用法: ${invokedAs} [strict|HuangAura|WenNova] | ${invokedAs} mode <m> | ${invokedAs} allow|deny <tool>`)}\n`);
+    const allowAns = (await ask('add an ALLOW rule (tool name or pattern, empty = skip): ')).trim();
+    if (allowAns !== '') addSessionRule('allow', allowAns);
+    const denyAns = (await ask('add a DENY rule (tool name or pattern, empty = skip): ')).trim();
+    if (denyAns !== '') addSessionRule('deny', denyAns);
+    printAbove(`${ANSI.dim('最终状态：')}\n`);
+    printPanelLines(permissionsPanel(agent.engine.mode, permissionModeShort(agent.engine.mode), permRuleRows()));
+  }
+
+  /** 会话规则 → 面板行数据 */
+  function permRuleRows(): { effect: string; tool: string; command?: string; path?: string }[] {
+    return sessionRules.map((r) => ({
+      effect: r.effect,
+      tool: r.tool,
+      ...(r.match?.command !== undefined ? { command: r.match.command } : {}),
+      ...(r.match?.path !== undefined ? { path: r.match.path } : {}),
+    }));
+  }
+
+  function addSessionRule(effect: 'allow' | 'deny', tool: string): void {
+    const rule: PermissionRule = { effect, tool, source: 'user' };
+    sessionRules.push(rule);
+    agent.engine.addRules([rule]);
+    printAbove(`${ANSI.green(`已添加 ${effect} 规则: ${tool}（仅本次会话）。`)}\n`);
   }
 
   function cmdStatus(): void {
     const contextTokens = estimateMessagesTokens(agent.history, agent.registry.definitions());
     const windowSize = safeContextWindow(spec) ?? 128_000;
     const turns = agent.history.filter((m) => m.role === 'assistant').length;
-    printAbove(
-      [
-        `会话:   ${agent.sessionId}`,
-        `模型:   ${spec.provider}:${spec.model}`,
-        `模式:   ${agent.engine.mode}`,
-        `轮次:   ${turns}（历史消息 ${agent.history.length} 条）`,
-        `上下文: ~${contextTokens} / ${windowSize} tokens（${((contextTokens / windowSize) * 100).toFixed(1)}%）`,
-        `请求:   ${usageTotals.requests} 次，${usageTotals.inputTokens} 入 / ${usageTotals.outputTokens} 出 tokens`,
-      ].join('\n') + '\n',
+    printPanelLines(
+      statusPanel({
+        sessionId: agent.sessionId,
+        model: `${spec.provider}:${spec.model}`,
+        mode: agent.engine.mode,
+        tier: permissionModeShort(agent.engine.mode),
+        activeGroup: readUserConfig().activeAgentGroup,
+        turns,
+        historyCount: agent.history.length,
+        contextTokens,
+        contextWindow: windowSize,
+        requests: usageTotals.requests,
+        inputTokens: usageTotals.inputTokens,
+        outputTokens: usageTotals.outputTokens,
+      }),
     );
   }
 
   function cmdCost(): void {
-    const cost = usageTotals.costUsd > 0 ? `$${usageTotals.costUsd.toFixed(4)}` : '(当前 provider 未提供定价)';
-    printAbove(`累计用量: ${usageTotals.requests} 次请求 | 输入 ${usageTotals.inputTokens} tokens | 输出 ${usageTotals.outputTokens} tokens | 费用 ${cost}\n`);
+    printPanelLines(
+      costPanel({
+        requests: usageTotals.requests,
+        inputTokens: usageTotals.inputTokens,
+        outputTokens: usageTotals.outputTokens,
+        cacheReadTokens: usageTotals.cacheReadTokens,
+        cacheWriteTokens: usageTotals.cacheWriteTokens,
+        costUsd: usageTotals.costUsd,
+        priced: usageTotals.costUsd > 0,
+      }),
+    );
   }
 
   function cmdTools(): void {
-    const rows = agent.registry.list().map(
-      (t) => `  ${t.name.padEnd(8)} ${t.risk.padEnd(7)} ${t.readOnly ? '只读' : '可写'}${t.concurrencySafe ? ' · 并发安全' : ''}`,
+    printPanelLines(
+      toolsPanel(
+        agent.registry.list().map((t) => ({
+          name: t.name,
+          risk: t.risk,
+          readOnly: t.readOnly,
+          concurrencySafe: t.concurrencySafe,
+        })),
+      ),
     );
-    printAbove(`已注册工具：\n${rows.join('\n')}\n`);
   }
 
   function cmdCompact(): void {

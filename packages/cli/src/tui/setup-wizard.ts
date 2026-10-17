@@ -198,8 +198,10 @@ export function renderWizard(state: WizardState, cols: number): string[] {
   const panelW = Math.min(cols, 64);
   const innerW = panelW - 4;
   const lines: string[] = [];
-  const title = state.editing !== undefined ? ` model setup · edit @${state.editing} ` : ' model setup ';
-  const fill = panelW - 2 - title.length;
+  let title = state.editing !== undefined ? ` model setup · edit @${state.editing} ` : ' model setup ';
+  // 窄终端保护：标题超宽时截断，fill 不得为负
+  if (title.length > panelW - 6) title = title.slice(0, Math.max(1, panelW - 7));
+  const fill = Math.max(0, panelW - 2 - title.length);
   lines.push(`╭${'─'.repeat(Math.floor(fill / 2))}${title}${'─'.repeat(fill - Math.floor(fill / 2))}╮`);
 
   const pushRow = (left: string, right: string) => {

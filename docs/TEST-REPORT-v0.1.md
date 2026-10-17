@@ -79,7 +79,7 @@ MockProvider 请求记录与脚本耗尽语义（LW-PRV-007）；MemoryRuntime �
 
 `--version` ✓；`doctor`（12 项检查，无密钥环境正常，不泄露值）✓；`-p` mock text 输出 exit=0 ✓；`--output-format stream-json` 每行含 schemaVersion/sessionId/ts ✓；`--output-format json` 输出版本化结果对象 ✓；非法参数 exit=2 ✓；**真实工作区端到端**（read 工具读真实文件 → mock 汇报 → exit=0）✓。
 
-## 4. 测试驱动的修复与优化（25 项）
+## 4. 测试驱动的修复与优化（28 项）
 
 | # | 发现 | 修复 |
 | --- | --- | --- |
@@ -108,6 +108,9 @@ MockProvider 请求记录与脚本耗尽语义（LW-PRV-007）；MemoryRuntime �
 | 23 | 向导编辑模式无法"回车沿用现有值"（校验先于编辑语义判断） | 编辑模式下文本步空输入跳过必填校验、保留原值 |
 | 24 | **pty 探针发现的闪烁根因**：每次 ↑↓ 移动联想整块 `ESC[J` 擦除 + 全量重画（实测 ~44KB/按键、4–5 次全量擦除）；150ms 状态定时器空闲时也在全量重画（~88KB/1.2s）；根因是「清除下方 → 逐行重写」的整块刷新模式在每次按键都执行 | chrome 改为**逐行差分渲染**：只原位重写变化行（`\r`+行+`ESC[K`），帧收缩时原位清空多余行并保持底部锚定；内容未变时**零写入**；整帧用 synchronized update（DEC 2026）包裹。实测 ~440B/按键、0 次全量擦除、空闲 0 字节 |
 | 25 | **模拟器/pyte 双重验证发现的光标 off-by-one**：光标尾部定位用 `CUD(aboveBox+2)`，实际落在输入框**底边框**行而非输入行（内容行应为锚点+aboveBox+1）；且帧收缩路径未补偿帧偏移，关闭联想后光标会飞到屏幕顶部 | 光标定位修正为 `aboveBox+1+帧偏移`；新增 `frameInset` 跟踪帧相对锚点的行偏移，差分/收缩路径统一补偿 |
+| 26 | **面板测试发现**：`truncateToWidth` 不识别 ANSI 转义，把转义字节算作可见列——带颜色的表格行被提前截断（`yes`→`ye`，甚至截断在转义序列中间产生乱码残留） | 改为转义序列零宽透传（sticky 正则），不再截断于序列内部 |
+| 27 | **pty 冒烟发现**：pty 宽度 24 列 + `edit team` 长标题使 `repeat(负数)` 抛 RangeError 崩溃（两个向导同款风险） | 两个向导渲染均做标题截断与 `Math.max(0, fill)` 下限保护 |
+| 28 | 命令重写时按范围替换误删 `switchModel`（typecheck 立即报 5 处未定义） | 恢复函数并全局复核引用 |
 
 ## 5. TUI 专项（v0.1 追加，36 项单测 + pty 冒烟）
 
@@ -209,14 +212,40 @@ openai-compatible 新增 authStyle：x-api-key 头与 ?key= 查询参数按配�
 - **屏幕级探针**（自研最小 VT100 模拟器 + pyte 交叉验证）：启动面板/输入框/状态栏自顶排布；联想层紧贴输入框上方、反显选中行 = /help、行内中文简介随命令显示；Esc 后无残留且输入框保持原区域底部；输入 `abc` 后光标落于输入行文本末尾（修正 off-by-one）；`/permission` 全链路可见。
 - 附带修复：打开联想时自动收起欢迎面板（避免弹层与 22 行面板叠加超出屏幕）。
 
-## 9. 已知限制（v0.1 范围外，按 WBS 顺延）
+## 9. agent 群与信息面板（v0.1 追加，22 项单测 + pty 全流程冒烟）
+
+### 9.1 agent 群数据层（5 项）
+
+- save/list/get/delete；激活群把 common 角色写入当前模型并记录 `activeAgentGroup`；删除激活群自动清理该标记。
+- **同一模型可担任多个角色**（三角色同模型保存并激活通过）；`availableModelRefs` = 内置 Provider 全部模型 + `@档案`。
+
+### 9.2 /set-agents 群向导（6 项）
+
+- 步骤结构 target→name→hyaki→sota→common；有群时先选目标（已有群进入编辑并预填三角色、进入角色步自动高亮预填模型）；无群时直接开始命名。
+- 新建完整流程达 done 且答案齐备（含同模型多角色）；空名/非法名/重名校验停留原步；↑↓ 循环选择与选项窗口滚动；渲染等宽、三态标记（◉●○）与角色标签齐全。
+
+### 9.3 信息面板（11 项）
+
+- `panel()`：圆角边框、等宽、标题居中、超宽截断；`table()`：按显示宽度对齐、分隔线；`bar()/badge()/kv()/section()` 基础件（含 clamp 与大小写）。
+- views：`/status`（会话+上下文进度条+激活群）、`/cost`（输入/输出/缓存占比条+计费）、`/tools`（风险表）、`/permissions`（档位徽标+规则表）、`/doctor`（✔/!/✘ 诊断表与失败计数）、`/model`（当前+内置+档案+agent 群三段）、`/manage`（档案表）、`/help`（命令表+输入语法）。
+
+### 9.4 pty 全流程冒烟（80 列 pty）
+
+`/set-agents` 新建群 team（hyaki=mock / sota=deepseek-chat / common=mock，↓ 选择生效）→ 保存摘要三角色齐全 → 激活（"已激活 agent 群"）→ `/model` 面板显示 agent groups 段与 `@team` → `/setting` 进入编辑当前群（标题 `set agents · edit team`，四步回车沿用）→ 再激活 → `/cost` 面板（cache rd 行）→ `/permissions` 问答引导（档位/allow/deny 三问 + 最终面板）→ `/agents` M3 面板（work mode / ships in M3）→ `/exit`。磁盘核对：`agentGroups.team` 三角色、`activeAgentGroup=team`。
+
+### 9.5 交互式命令问答化
+
+- `/permissions`（及 `/permission`）无参数：面板先行，随后逐项引导 —— 切换档位（可空）→ 添加 allow 规则（可空）→ 添加 deny 规则（可空）→ 输出最终状态面板；带参数快路径保持。
+- `/set-agents`、`/setting`、`/setup`、`/manage <name>` 全部为问答/向导式；`/model` 面板式展示 + `/model use` 切换（provider:model / @档案 / @群）。
+
+## 10. 已知限制（v0.1 范围外，按 WBS 顺延）
 
 - 真实模型 Provider 仅经本地 SSE mock 验证合约（G2 的"真实密钥联调"待 M1 收尾/用户提供密钥后补充 DeepSeek 实测）。
 - TUI、会话恢复 CLI、自动压缩、MCP、决策层、三角色编排未实现（M2~M4 范围）。
 - 评测集为 10 项种子，G1 要求的 30 项任务集在 M1 后续扩充。
 - CI 工作流已就绪（.github/workflows/ci.yml，ubuntu/macos × Node 22），推送后首跑验证。
 
-## 10. 复现命令
+## 11. 复现命令
 
 ```bash
 corepack pnpm install

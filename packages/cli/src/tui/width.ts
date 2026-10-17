@@ -72,15 +72,28 @@ export function displayWidth(s: string): number {
   return w;
 }
 
-/** 按显示宽度截断字符串（保留前 maxCols 列），返回 [文本, 实际列宽] */
+/** 按显示宽度截断字符串（保留前 maxCols 列，ANSI 转义序列零宽透传，
+ * 不会被截断在转义序列中间），返回 [文本, 实际列宽] */
 export function truncateToWidth(s: string, maxCols: number): [string, number] {
+  const esc = /\x1b\[[0-9;?]*[A-Za-z]/y;
   let w = 0;
   let out = '';
-  for (const ch of s) {
-    const cw = charWidth(ch.codePointAt(0) ?? 0);
+  let i = 0;
+  while (i < s.length) {
+    esc.lastIndex = i;
+    const m = esc.exec(s);
+    if (m !== null) {
+      out += m[0];
+      i = esc.lastIndex;
+      continue;
+    }
+    const cp = s.codePointAt(i) ?? 0;
+    const ch = String.fromCodePoint(cp);
+    const cw = charWidth(cp);
     if (w + cw > maxCols) break;
     out += ch;
     w += cw;
+    i += ch.length;
   }
   return [out, w];
 }

@@ -18,6 +18,8 @@ export interface CliArgs {
   verbose: boolean;
   /** Skip the TUI boot animation (FR-137 / TUI). */
   noBoot: boolean;
+  /** Activate a saved agent group at startup (its common role drives the session). */
+  agents?: string;
   command?: 'exec' | 'doctor' | 'config' | 'version' | 'help';
   configSub?: 'list' | 'get' | 'path';
 }
@@ -86,6 +88,7 @@ Options:
       --max-budget-usd <amount>    费用上限
       --cwd <path>                 工作区目录
       --no-boot                    跳过 TUI 启动动画
+      --agents <name>              启动时激活 agent 群（common 角色成为执行模型）
       --verbose                    stderr 诊断
 `;
 
@@ -194,6 +197,9 @@ export function parseArgs(argv: string[]): CliArgs {
         break;
       case '--no-boot':
         args.noBoot = true;
+        break;
+      case '--agents':
+        args.agents = next(a);
         break;
       default:
         if (a.startsWith('-')) {

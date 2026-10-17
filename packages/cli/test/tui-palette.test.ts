@@ -30,7 +30,7 @@ describe('tui/palette 指令联想', () => {
     expect(suggestCommands('/p').map((h) => h.name)).toEqual(['/permission', '/permissions']);
     expect(suggestCommands('/MO').map((h) => h.name)).toEqual(['/model']);
     expect(suggestCommands('/c').map((h) => h.name)).toEqual(['/cost', '/compact', '/clear']);
-    expect(suggestCommands('/s').map((h) => h.name)).toEqual(['/status', '/setup']);
+    expect(suggestCommands('/s').map((h) => h.name)).toEqual(['/status', '/setup', '/set-agents', '/setting']);
   });
 
   it('exactIndex：完整命令名命中', () => {
