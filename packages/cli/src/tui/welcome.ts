@@ -1,4 +1,5 @@
 import { displayWidth } from './width.js';
+import { artColors } from './terminal.js';
 
 /**
  * 欢迎面板（Welcome Panel）：进入正式工作区时的初始区域（仿 Claude Code /
@@ -104,10 +105,10 @@ export function butterflyPixels(w: number, h: number, tMs: number): Map<number, 
   return px;
 }
 
-/** 黑白阴影艺术字像素：主字纯白 255，右下偏移 1 列/2 像素行阴影深灰 234。
+/** 黑白阴影艺术字像素：主字/阴影色随主题（深色终端白+深灰，浅色终端深灰+浅灰）。
  * 字形纵向 ×2（半块像素为正方形）；横向按目标宽度自动整数倍缩放 +
  * 均匀字距，铺满整个底部宽度。像素高 = 5×2+2 = 12 = 6 终端行 */
-export function artPixels(w: number, text = 'LIWENCode'): Map<number, number> {
+export function artPixels(w: number, text = 'LIWENCode', colors: { main: number; shadow: number } = artColors()): Map<number, number> {
   const glyphs = [...text].map((ch) => MINI[ch]).filter((g): g is { w: number; rows: string[] } => g !== undefined);
   if (glyphs.length === 0) return new Map();
   const baseW = glyphs.reduce((acc, g) => acc + g.w, 0);
@@ -128,10 +129,10 @@ export function artPixels(w: number, text = 'LIWENCode'): Map<number, number> {
         for (let s = 0; s < xScale; s++) {
           const col = x + c * xScale + s;
           // 阴影（先行，被主字覆盖处重写）：深灰 234 与亮白 255 拉开对比
-          px.set((r * 2 + 2) * w + (col + shadowOff), 234);
-          px.set((r * 2 + 3) * w + (col + shadowOff), 234);
-          px.set((r * 2) * w + col, 255);
-          px.set((r * 2 + 1) * w + col, 255);
+          px.set((r * 2 + 2) * w + (col + shadowOff), colors.shadow);
+          px.set((r * 2 + 3) * w + (col + shadowOff), colors.shadow);
+          px.set((r * 2) * w + col, colors.main);
+          px.set((r * 2 + 1) * w + col, colors.main);
         }
       }
     }

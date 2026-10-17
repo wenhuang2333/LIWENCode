@@ -35,12 +35,13 @@ describe('tui/welcome 欢迎面板', () => {
     expect(width).toBe(32);
   });
 
-  it('artPixels：黑白阴影（纯白主字 + 深灰阴影）且横向铺满宽度', () => {
+  it('artPixels：黑白阴影（主题色主字 + 阴影）且横向铺满宽度', () => {
     const W = 80;
-    const px = artPixels(W);
+    const theme = { main: 255, shadow: 234 };
+    const px = artPixels(W, 'LIWENCode', theme);
     const colors = new Set(px.values());
-    expect(colors.has(255)).toBe(true); // 主字
-    expect(colors.has(234)).toBe(true); // 阴影
+    expect(colors.has(theme.main)).toBe(true); // 主字
+    expect(colors.has(theme.shadow)).toBe(true); // 阴影
     expect(colors.size).toBe(2); // 纯黑白灰，无彩色
     // 铺满：最左 6 列与最右 6 列内均有像素
     let minCol = W;

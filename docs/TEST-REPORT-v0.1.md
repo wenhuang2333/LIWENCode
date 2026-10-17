@@ -258,6 +258,16 @@ openai-compatible 新增 authStyle：x-api-key 头与 ?key= 查询参数按配�
 - 20 条连发（10 空闲 + 10 忙碌）：20/20 消息获回复（唯一 ID 1–20），零丢失、零崩溃。
 - 重试可见性专项：重试期显示 `处理中… Ns · 已排队 1 条`，耗尽后打印 `LW-PRV-007` 并按序消费队列。
 
+### 10.3 终端异常清单复查（24 项，新增 12 项环境专项断言全部通过）
+
+- **渲染**：SYNC 原子刷新/未变零输出/流式 16ms 合批（闪烁）；SIGWINCH + 相对锚点（resize）；CJK/emoji 显示宽度对齐 + `LIWEN_TUI_ASCII=1` 降级（乱码）；OSC 11 主题探测（浅色终端艺术字 240/248）；ANSI 零宽截断（截断）；<40×8 最小界面（黑屏/零区域）；崩溃与信号统一恢复光标。
+- **输入**：ESC 分片缓冲（方向键分块到达仍生效）；引导异常自动还原输入模式（焦点陷阱）；DEC 2004 括号粘贴 + 换行转空格 + 无 2004 启发式（粘贴）；`/exit\r` 同块不误判（回归测试，见修复 #29）。
+- **卡死**：事件驱动无阻塞读；空闲零写入；重试期可见进度。同步大文件读取短暂阻塞为 v0.1 已知限制。
+- **崩溃/污染**：`installTerminalGuards`（uncaughtException/unhandledRejection/exit/SIGINT/SIGTERM/SIGHUP）恢复 raw/光标/粘贴/同步输出（SIGTERM 实测 143 退出且终端恢复）；stdout EPIPE 不崩；SIGKILL/OOM 不可拦截（文档给出 reset/stty sane）。
+- **环境**：非 TTY 路由 REPL；TERM=xterm 实测正常；不使用 alternate screen 规避 IDE 内嵌终端缺陷；Windows conhost 未验证。
+
+新增 8 项终端健壮层单测（`tui-terminal.test.ts`）：极小窗口判定、转义分片识别、粘贴清洗（含跨块/回归）、OSC 11 亮度解析、ASCII 降级。
+
 ## 11. 已知限制（v0.1 范围外，按 WBS 顺延）
 
 - 真实模型 Provider 仅经本地 SSE mock 验证合约（G2 的"真实密钥联调"待 M1 收尾/用户提供密钥后补充 DeepSeek 实测）。

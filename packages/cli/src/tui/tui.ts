@@ -61,6 +61,17 @@ import { BootAnimation, bootSupported } from './boot.js';
 import { LineEditor } from './editor.js';
 import { StatusTracker, formatStatusLine } from './status.js';
 import { displayWidth, truncateToWidth } from './width.js';
+import {
+  BRACKET_PASTE_ON,
+  detectDarkBackground,
+  incompleteEscapeSuffix,
+  installTerminalGuards,
+  isTinyTerminal,
+  sanitizeInputChunk,
+  setDarkTheme,
+  toAscii,
+  type GuardHandle,
+} from './terminal.js';
 import { renderPanel, welcomeSupported } from './welcome.js';
 import { suggestCommands, exactIndex, paletteWindow, type CommandHint } from './palette.js';
 import {
@@ -155,10 +166,14 @@ interface UsageTotals {
 }
 
 /** 启动动画（按任意键跳过；--no-boot 或终端过小直接跳过） */
+function asciiModeSkip(): boolean {
+  return toAscii('▀') !== '▀'; // ASCII 降级下不播放半块粒子动画
+}
+
 async function playBoot(noBoot: boolean): Promise<void> {
   const cols = output.columns ?? 80;
   const rows = output.rows ?? 24;
-  if (noBoot || !bootSupported(cols, rows) || input.isTTY !== true) return;
+  if (noBoot || asciiModeSkip() || !bootSupported(cols, rows) || input.isTTY !== true) return;
   const anim = new BootAnimation({ cols, rows });
   const t0 = Date.now();
   let skip = false;
@@ -212,7 +227,12 @@ export async function runTui(opts: TuiOptions): Promise<number> {
 
   input.setRawMode(true);
   input.resume();
-
+  // 崩溃/信号清理钩子（等价 Rust TUI 的 panic hook）：任何异常退出都恢复终端
+  const guards: GuardHandle = installTerminalGuards(input, output);
+  // 括号粘贴：多行粘贴不触发多次提交
+  output.write(BRACKET_PASTE_ON);
+  // 主题探测（OSC 11）：浅色终端上欢迎面板艺术字改用深色系（须在主输入挂载前）
+  setDarkTheme(await detectDarkBackground(input, output));
   const editor = new LineEditor();
   const tracker = new StatusTracker({ model: `${spec.provider}:${spec.model}`, contextWindow: safeContextWindow(spec) });
 
@@ -315,7 +335,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     const nl = text.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
     const parts: string[] = [];
     parts.push(chromeDrawn ? eraseChromeSeq() : '\r');
-    parts.push(nl);
+    parts.push(toAscii(nl));
     if (!nl.endsWith('\r\n')) parts.push('\r\n');
     output.write(parts.join(''));
     chromeDrawn = false;
@@ -410,6 +430,19 @@ export async function runTui(opts: TuiOptions): Promise<number> {
   function buildChromeFrame(cols: number): { lines: string[]; aboveBox: number; cursorVisCol: number } {
     const lines: string[] = [];
 
+    // 极小终端（<40 列或 <8 行）：不画边框与面板，仅保留输入行 + 状态行
+    if (isTinyTerminal(cols, output.rows ?? 24)) {
+      const rawText = editor.text();
+      const [vis] = truncateToWidth(rawText, Math.max(1, cols - 3));
+      const snapTiny = tracker.snapshot(Date.now());
+      const statusTiny = formatStatusLine(snapTiny, Math.max(8, cols - 1));
+      return {
+        lines: [`${ANSI.cyan('❯ ')}${vis}`, ` ${ANSI.dim(statusTiny)}`],
+        aboveBox: 0,
+        cursorVisCol: Math.min(displayWidth(vis), Math.max(0, cols - 3)),
+      };
+    }
+
     // 欢迎面板（左：多彩扇翅蝴蝶 + 黑白阴影艺术字；右：英文欢迎与提示；
     // 用户敲任意键后蝴蝶冻结为静态姿态）
     if (welcomeActive) {
@@ -493,7 +526,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       seq.push('\r');
     }
     for (let i = 0; i < lines.length; i++) {
-      seq.push(lines[i]!);
+      seq.push(toAscii(lines[i]!));
       if (i < lines.length - 1) seq.push('\r\n');
     }
     const inputRow = aboveBox + 1;
@@ -579,16 +612,35 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     guidedDepth++;
     try {
       return await fn();
+    } catch (e) {
+      // 引导流程异常：把界面从 prompt 模式救回，避免焦点陷阱
+      if (mode.kind === 'prompt') {
+        mode = { kind: 'input' };
+        editor.setNavCapture(false);
+        printAbove(`${ANSI.red(`引导流程出错: ${e instanceof Error ? e.message : String(e)}`)}
+`);
+        redraw();
+      }
+      throw e;
     } finally {
       guidedDepth--;
       if (guidedDepth === 0) queuedAnswers.length = 0;
+      if (mode.kind === 'prompt') {
+        mode = { kind: 'input' };
+        editor.setNavCapture(false);
+        redraw();
+      }
     }
   }
 
   // ── 键盘路由 ────────────────────────────────────────────────────────
 
-  input.on('data', (chunk: Buffer) => {
-    const events = editor.feed(chunk.toString('utf8'));
+  // 输入清洗状态：bracketed paste 跨块、未完成转义序列暂存
+  const pasteState = { pasteActive: false };
+  let pendingEscape = '';
+  let pendingFlush: NodeJS.Timeout | undefined;
+  const processInput = (text: string): void => {
+    const events = editor.feed(text);
     // 任意按键：欢迎蝴蝶立即转为静态（防频繁重绘）
     if (events.length > 0 && welcomeActive) welcomeFrozen = true;
     for (const ev of events) {
@@ -677,6 +729,26 @@ export async function runTui(opts: TuiOptions): Promise<number> {
         updatePalette();
         redraw();
       }
+    }
+  };
+
+  input.on('data', (chunk: Buffer) => {
+    const clean = sanitizeInputChunk(chunk.toString('utf8'), pasteState);
+    if (clean === '') return;
+    const combined = pendingEscape + clean;
+    const suffix = incompleteEscapeSuffix(combined);
+    pendingEscape = suffix;
+    const complete = suffix === '' ? combined : combined.slice(0, combined.length - suffix.length);
+    if (complete !== '') processInput(complete);
+    if (pendingEscape !== '') {
+      // 用户单独按 Esc：短暂等待后续字节；超时按独立 Esc 处理（关闭联想/取消向导）
+      if (pendingFlush !== undefined) clearTimeout(pendingFlush);
+      pendingFlush = setTimeout(() => {
+        const held = pendingEscape;
+        pendingEscape = '';
+        pendingFlush = undefined;
+        if (held !== '') processInput(held);
+      }, 120);
     }
   });
 
@@ -955,6 +1027,20 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     const resumeId = pendingResume;
     pendingResume = undefined;
     let inText = false;
+    // 增量批处理：provider 高频小 delta 合并到 16ms 一次写入
+    let streamBuf = '';
+    let streamTimer: NodeJS.Timeout | undefined;
+    const flushStream = (): void => {
+      if (streamTimer !== undefined) {
+        clearTimeout(streamTimer);
+        streamTimer = undefined;
+      }
+      if (streamBuf !== '') {
+        const out = streamBuf;
+        streamBuf = '';
+        printAbove(out);
+      }
+    };
     try {
       const stream = agent.run(expanded, { signal: activeAbort.signal, ...(resumeId !== undefined ? { sessionId: resumeId } : {}) });
       for (;;) {
@@ -973,6 +1059,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       if (LiwenError.is(e)) printAbove(`${ANSI.red(`错误 ${e.code}: ${e.message}`)}\n`);
       else printAbove(`${ANSI.red(`错误: ${e instanceof Error ? e.message : String(e)}`)}\n`);
     } finally {
+      flushStream();
       if (inText) printAbove('\n');
       busy = false;
       busySince = null;
@@ -985,9 +1072,13 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       switch (ev.type) {
         case 'text.delta':
           inText = true;
-          printAbove(ev.text.replace(/\n/g, '\r\n'));
+          streamBuf += ev.text;
+          if (streamTimer === undefined) {
+            streamTimer = setTimeout(flushStream, 16);
+          }
           break;
         case 'tool.start':
+          flushStream();
           if (inText) {
             printAbove('\r\n');
             inText = false;
@@ -995,6 +1086,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
           printAbove(`${ANSI.dim(`  ⚙ ${ev.name} ${summarizeInput(ev.input)}`)}\r\n`);
           break;
         case 'tool.result': {
+          flushStream();
           const first = ev.content.find((c) => c.type === 'text');
           const text = first !== undefined && first.type === 'text' ? first.text : '';
           const oneline = text.split('\n').slice(0, 2).join(' ⏎ ').slice(0, 160);
@@ -1484,12 +1576,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
 
   function cleanup(code: number): never {
     if (statusTimer !== undefined) clearInterval(statusTimer);
-    try {
-      input.setRawMode(false);
-    } catch {
-      // stdin 可能已销毁
-    }
-    output.write(SHOW_CURSOR);
+    guards.cleanup(); // 恢复 raw/光标/粘贴/同步输出（幂等）
     process.exit(code);
   }
 
