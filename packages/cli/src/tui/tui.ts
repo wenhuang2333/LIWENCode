@@ -419,7 +419,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
         cols,
         panelH,
         Date.now(),
-        { version: 'v0.1.0', model: `${spec.provider}:${spec.model}`, tier: permissionModeShort(agent.engine.mode) },
+        { version: 'v0.1.0', model: `${spec.provider}:${spec.model}`, tier: tierEnShort(agent.engine.mode) },
         welcomeFrozen,
       );
       lines.push(...panel);
@@ -1526,6 +1526,17 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     // 常驻：由 cleanup() 结束进程
   });
   return 0;
+}
+
+/** 欢迎面板用英文档位短标签（面板整体英文，避免 CJK 撑破右列对齐） */
+function tierEnShort(m: PermissionMode): string {
+  switch (m) {
+    case 'strict': return 'strict · confirm all';
+    case 'default': return 'partial · reads free';
+    case 'acceptEdits': return 'acceptEdits';
+    case 'plan': return 'plan · read-only';
+    case 'bypass': return 'bypass · no prompts';
+  }
 }
 
 function tierLongOf(mode: PermissionMode): string {
