@@ -111,9 +111,6 @@ export const en = {
   'box.busy': ' · working…{secs}s',
   'box.queued': ' · queued {n}',
   'box.permissionTitle': 'Allow? [y]once / [s]session / [n]deny (default n)',
-  'palette.titleWindow': 'commands {start}-{end}/{total}',
-  'palette.titleAll': 'commands ({total})',
-  'palette.usage': 'usage: {name}{args}',
   'palette.keys': '↑↓ select · Tab/Enter complete · Esc close',
 
   // ── permission flow ─────────────────────────────────────────────────────

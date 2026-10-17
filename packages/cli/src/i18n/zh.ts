@@ -109,9 +109,6 @@ export const zh: Record<MsgKey, string> = {
   'box.busy': ' · 处理中…{secs}s',
   'box.queued': ' · 已排队 {n} 条',
   'box.permissionTitle': '允许执行？[y]本次 / [s]本次会话 / [n]拒绝（默认 n）',
-  'palette.titleWindow': '命令 {start}-{end}/{total}',
-  'palette.titleAll': '命令（{total}）',
-  'palette.usage': '用法：{name}{args}',
   'palette.keys': '↑↓ 选择 · Tab/Enter 补全 · Esc 关闭',
 
   // ── 权限流程 ────────────────────────────────────────────────────────────

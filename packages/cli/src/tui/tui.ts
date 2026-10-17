@@ -65,7 +65,7 @@ import { expandAtPaths, summarizeInput } from '../prompt-utils.js';
 import { BootAnimation, bootSupported } from './boot.js';
 import { LineEditor } from './editor.js';
 import { StatusTracker, formatStatusLine } from './status.js';
-import { displayWidth, truncateToWidth } from './width.js';
+import { displayWidth, padToWidth, truncateToWidth } from './width.js';
 import {
   BRACKET_PASTE_ON,
   detectDarkBackground,
@@ -381,48 +381,35 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     return `${ANSI.cyan(`liwen (${model})`)}${busyTag}${queued} ${ANSI.dim(`· ${tier}`)}`;
   }
 
-  /** 联想弹层可视行数上限：弹层在输入框下方，需给输入框(3)/状态(1)/边框余量留位 */
+  /** 联想弹层每页行数：一页 6 条，向下移动时窗口滑动（新的进来、旧的移出）。
+   * 终端过小时按可用高度收缩，最少 3 条。 */
+  const PALETTE_ROWS = 6;
   function paletteViewMax(total: number): number {
     const rows = output.rows ?? 24;
-    return Math.max(4, Math.min(total, rows - 8));
+    return Math.max(3, Math.min(total, PALETTE_ROWS, rows - 5));
   }
 
-  /** 指令联想弹层（输入框下方）：全量候选 + 每行简介 + 视窗滚动 */
+  /** 指令联想弹层（输入框下方）：无边框列表，一页 6 条 + 键位/位置提示行。
+   * 不加边框是因为每条命令的说明长度不同，框线只会造成参差的留白。 */
   function renderPalette(cols: number): string[] {
     const w = Math.min(cols, 72);
     const total = paletteHints.length;
     const { start, end } = paletteWindow(total, paletteIdx, paletteViewMax(total));
-    const windowed = end - start < total;
-    const title = ` ${windowed ? t('palette.titleWindow', { start: start + 1, end, total }) : t('palette.titleAll', { total })} `;
     const lines: string[] = [];
-    const fill = w - 2 - title.length;
-    lines.push(`╭${'─'.repeat(Math.floor(fill / 2))}${title}${'─'.repeat(fill - Math.floor(fill / 2))}╮`);
     for (let i = start; i < end; i++) {
       const h = paletteHints[i]!;
       const selected = i === paletteIdx;
       const marker = selected ? '❯ ' : '  ';
       const name = h.name.padEnd(13);
-      const rowPlain = ` ${marker}${name} ${h.brief}`;
-      const pad = w - 2 - plainLenOf(rowPlain);
-      const row = selected
-        ? `\x1b[7m ${marker}${ANSI.green(name)} ${h.brief}${' '.repeat(Math.max(0, pad))}\x1b[27m`
-        : ` ${marker}${ANSI.green(name)} ${ANSI.dim(h.brief)}${' '.repeat(Math.max(0, pad))}`;
-      lines.push(`│${row}│`);
+      const content = selected
+        ? `${marker}${ANSI.green(name)} ${h.brief}`
+        : `${marker}${ANSI.green(name)} ${ANSI.dim(h.brief)}`;
+      const [fitted] = truncateToWidth(content, w);
+      lines.push(selected ? `\x1b[7m${padToWidth(fitted, w)}\x1b[27m` : padToWidth(fitted, w));
     }
-    // 选中项用法 + 键位提示
-    const sel = paletteHints[paletteIdx]!;
-    const usage = t('palette.usage', { name: sel.name, args: sel.args !== '' ? ` ${sel.args}` : '' });
-    const [usageShown] = truncateToWidth(usage, w - 6);
-    lines.push(`├${'─'.repeat(w - 2)}┤`);
-    lines.push(`│ ${ANSI.dim(usageShown)}${' '.repeat(Math.max(0, w - 4 - displayWidth(usageShown)))} │`);
-    const keys = t('palette.keys');
-    lines.push(`│ ${ANSI.dim(keys)}${' '.repeat(Math.max(0, w - 4 - displayWidth(keys)))} │`);
-    lines.push(`╰${'─'.repeat(w - 2)}╯`);
+    const range = end - start < total ? `${start + 1}-${end}/${total} · ` : '';
+    lines.push(padToWidth(ANSI.dim(`${range}${t('palette.keys')}`), w));
     return lines;
-  }
-
-  function plainLenOf(s: string): number {
-    return s.replace(/\x1b\[[0-9;]*m/g, '').length;
   }
 
   /** 根据编辑器内容刷新联想候选（仅主输入模式；向导激活时不联想） */
