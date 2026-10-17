@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { loadConfig, nodeRuntime, LiwenError } from '@liwencode/core';
-import { USAGE, parseArgs, UsageError } from './args.js';
+import { usageText, parseArgs, UsageError } from './args.js';
 import { EXIT_OK, EXIT_USAGE, runPrint } from './run.js';
 import { formatDoctor, runDoctor } from './doctor.js';
 import { runInteractive } from './interactive.js';
 import { runTui } from './tui/tui.js';
-import { activateAgentGroup, loadSecretsIntoEnv } from './model-config.js';
+import { activateAgentGroup, loadSecretsIntoEnv, savedLanguage } from './model-config.js';
+import { setLanguage, t } from './i18n/index.js';
 
 export const VERSION = 'liwen v0.1.0 (LIWENCode internal, M0+M1)';
 
@@ -13,13 +14,15 @@ async function main(argv: string[]): Promise<number> {
   // Merge ~/.liwencode/env (0600) into process env first — never overrides
   // real env vars; secrets never reach sessions or logs (BR-023/FR-121).
   loadSecretsIntoEnv();
+  // 语言必须在任何输出前确定：配置文件 > 默认英语（/language 写入，下次启动生效）
+  setLanguage(savedLanguage());
 
   let args;
   try {
     args = parseArgs(argv);
   } catch (e) {
     if (e instanceof UsageError) {
-      process.stderr.write(`${e.message}\n\n${USAGE}`);
+      process.stderr.write(`${e.message}\n\n${usageText()}`);
       return EXIT_USAGE;
     }
     throw e;
@@ -30,7 +33,7 @@ async function main(argv: string[]): Promise<number> {
     return EXIT_OK;
   }
   if (args.command === 'help') {
-    process.stdout.write(USAGE);
+    process.stdout.write(usageText());
     return EXIT_OK;
   }
   if (args.command === 'doctor') {
@@ -49,7 +52,7 @@ async function main(argv: string[]): Promise<number> {
     if (args.configSub === 'get') {
       const key = args.positional[1];
       if (key === undefined) {
-        process.stderr.write('config get requires a key (LW-CLI-001)\n');
+        process.stderr.write(`${t('config.requiresKey')}\n`);
         return EXIT_USAGE;
       }
       const value = (config as unknown as Record<string, unknown>)[key];
@@ -80,7 +83,7 @@ async function main(argv: string[]): Promise<number> {
     return runInteractive({ args, ...(prompt !== '' ? { initialPrompt: prompt } : {}) });
   }
   if (prompt === '') {
-    process.stderr.write(`-p/exec requires a prompt (LW-CLI-001)\n`);
+    process.stderr.write(`${t('args.promptRequired')}\n`);
     return EXIT_USAGE;
   }
   return runPrint(args, prompt);

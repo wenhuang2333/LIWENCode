@@ -7,6 +7,7 @@
  */
 
 import type { AgentEvent } from '@liwencode/core';
+import { t } from '../i18n/index.js';
 import { displayWidth } from './width.js';
 
 export interface StatusModel {
@@ -152,20 +153,20 @@ export function formatTokens(n: number): string {
 /** 渲染状态行（纯文本，颜色由调用方叠加；按显示宽度截断到 cols） */
 export function formatStatusLine(s: StatusSnapshot, cols: number): string {
   const parts: string[] = [];
-  parts.push(`模型 ${s.model}`);
+  parts.push(`${t('status.model')} ${s.model}`);
   const ctx =
     s.contextWindow !== null
       ? `${formatTokens(s.contextUsed)}/${formatTokens(s.contextWindow)}（${Math.min(100, Math.round((s.contextUsed / s.contextWindow) * 100))}%）`
       : formatTokens(s.contextUsed);
-  parts.push(`上下文 ${ctx}`);
-  parts.push(`轮次 ${s.turn}:${s.step}`);
+  parts.push(`${t('status.context')} ${ctx}`);
+  parts.push(`${t('status.turn')} ${s.turn}:${s.step}`);
   parts.push(
-    `速度 ${s.tokensPerSecond !== null ? `${s.tokensPerSecond} tok/s` : '—'}`,
+    `${t('status.speed')} ${s.tokensPerSecond !== null ? t('status.tokPerSec', { n: s.tokensPerSecond }) : t('status.dash')}`,
   );
   parts.push(
-    `缓存 ${s.cacheHitRate !== null ? `${Math.round(s.cacheHitRate * 100)}%` : '—'}`,
+    `${t('status.cache')} ${s.cacheHitRate !== null ? `${Math.round(s.cacheHitRate * 100)}%` : t('status.dash')}`,
   );
-  parts.push(`总token ${formatTokens(s.totalTokens)}`);
+  parts.push(`${t('status.totalTokens')} ${formatTokens(s.totalTokens)}`);
 
   let line = parts.join('  ');
   if (displayWidth(line) > cols) {

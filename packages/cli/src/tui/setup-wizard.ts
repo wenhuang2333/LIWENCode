@@ -10,6 +10,7 @@
 
 import type { AuthFieldKind, ProtocolKind } from '../model-config.js';
 import { AUTH_FIELD_LABELS, PROTOCOL_LABELS } from '../model-config.js';
+import { t } from '../i18n/index.js';
 
 export type WizardStepKind = 'text' | 'secret' | 'select';
 
@@ -20,14 +21,17 @@ export interface WizardStep {
   hint: string;
 }
 
-export const WIZARD_STEPS: readonly WizardStep[] = [
-  { id: 'model', label: 'model name', kind: 'text', hint: 'e.g. deepseek-chat, claude-sonnet-4, gemini-2.0-flash' },
-  { id: 'baseUrl', label: 'request url', kind: 'text', hint: 'e.g. https://api.deepseek.com/v1' },
-  { id: 'apiKey', label: 'api key', kind: 'secret', hint: 'stored in ~/.liwencode/env (chmod 0600), never in config/logs' },
-  { id: 'protocol', label: 'api protocol', kind: 'select', hint: '↑↓ to pick · Enter to confirm' },
-  { id: 'authField', label: 'auth field', kind: 'select', hint: 'how the key is attached to requests' },
-  { id: 'profileName', label: 'profile name', kind: 'text', hint: 'referenced as @name in /model use; saved at the end' },
-];
+/** 步骤定义（标签/提示按当前 CLI 语言解析；顺序与 id 固定） */
+export function wizardSteps(): WizardStep[] {
+  return [
+    { id: 'model', label: t('setup.step.model'), kind: 'text', hint: t('setup.hint.model') },
+    { id: 'baseUrl', label: t('setup.step.baseUrl'), kind: 'text', hint: t('setup.hint.baseUrl') },
+    { id: 'apiKey', label: t('setup.step.apiKey'), kind: 'secret', hint: t('setup.hint.apiKey') },
+    { id: 'protocol', label: t('setup.step.protocol'), kind: 'select', hint: t('setup.hint.protocol') },
+    { id: 'authField', label: t('setup.step.authField'), kind: 'select', hint: t('setup.hint.authField') },
+    { id: 'profileName', label: t('setup.step.profileName'), kind: 'text', hint: t('setup.hint.profileName') },
+  ];
+}
 
 /** 每步专属颜色（点与线互不相同）：绿/青/蓝/洋红/橙/黄 */
 const STEP_COLORS = [46, 44, 33, 213, 208, 226];
@@ -72,7 +76,7 @@ export function newWizard(prefill?: Partial<WizardAnswers>, editing?: string): W
 
 /** 进入 select 步时把高亮定位到已保存答案或协议默认项 */
 function resetSelection(state: WizardState): WizardState {
-  const step = WIZARD_STEPS[state.stepIdx];
+  const step = wizardSteps()[state.stepIdx];
   if (step?.kind !== 'select') return { ...state, selIdx: 0 };
   const options = selectOptions(state);
   const saved = step.id === 'protocol' ? state.answers.protocol : state.answers.authField;
@@ -81,7 +85,7 @@ function resetSelection(state: WizardState): WizardState {
 }
 
 export function selectOptions(state: WizardState): string[] {
-  const step = WIZARD_STEPS[state.stepIdx]!;
+  const step = wizardSteps()[state.stepIdx]!;
   if (step.id === 'protocol') return [...PROTOCOL_ORDER];
   return authOptionsFor(state.answers.protocol);
 }
@@ -93,22 +97,22 @@ export function optionLabel(stepId: WizardStep['id'], value: string): string {
 
 /** 当前步问题（显示在输入框标题） */
 export function wizardQuestion(state: WizardState): string {
-  const step = WIZARD_STEPS[state.stepIdx];
+  const step = wizardSteps()[state.stepIdx];
   if (step === undefined) return '';
   const n = state.stepIdx + 1;
-  const total = WIZARD_STEPS.length;
+  const total = wizardSteps().length;
   if (step.kind === 'select') return `[${n}/${total}] ${step.label} — ${step.hint}`;
   return `[${n}/${total}] ${step.label} — ${step.hint}`;
 }
 
 /** 当前步是否为选择步（↑↓ 导航而非编辑文本） */
 export function wizardIsSelect(state: WizardState): boolean {
-  return WIZARD_STEPS[state.stepIdx]?.kind === 'select';
+  return wizardSteps()[state.stepIdx]?.kind === 'select';
 }
 
 /** 当前步是否需要掩码显示（API Key） */
 export function wizardIsSecret(state: WizardState): boolean {
-  return WIZARD_STEPS[state.stepIdx]?.kind === 'secret';
+  return wizardSteps()[state.stepIdx]?.kind === 'secret';
 }
 
 /**
@@ -116,7 +120,7 @@ export function wizardIsSecret(state: WizardState): boolean {
  * 校验失败时停在原步并带 error。
  */
 export function submitAnswer(state: WizardState, answer: string): { state: WizardState; done: boolean } {
-  const step = WIZARD_STEPS[state.stepIdx];
+  const step = wizardSteps()[state.stepIdx];
   if (step === undefined) return { state, done: true };
   let value = answer.trim();
   if (step.kind === 'select') {
@@ -128,18 +132,18 @@ export function submitAnswer(state: WizardState, answer: string): { state: Wizar
     state.editing !== undefined && value === '' && state.answers[step.id] !== undefined && step.kind !== 'select';
   // 校验（沿用现值时跳过）
   if (!keepExisting && step.id === 'model' && value === '') {
-    return { state: { ...state, error: 'model name is required' }, done: false };
+    return { state: { ...state, error: t('setup.err.modelRequired') }, done: false };
   }
   if (!keepExisting && step.id === 'baseUrl') {
-    if (value === '') return { state: { ...state, error: 'request url is required' }, done: false };
-    if (!/^https?:\/\//.test(value)) return { state: { ...state, error: 'url must start with http:// or https://' }, done: false };
+    if (value === '') return { state: { ...state, error: t('setup.err.urlRequired') }, done: false };
+    if (!/^https?:\/\//.test(value)) return { state: { ...state, error: t('setup.err.urlScheme') }, done: false };
   }
   if (step.id === 'profileName') {
     if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value) || value.length > 48) {
-      return { state: { ...state, error: 'profile name: letters/digits/-/_/. only, must start with alnum, ≤48 chars' }, done: false };
+      return { state: { ...state, error: t('setup.err.profileName') }, done: false };
     }
     if (value !== state.editing && getExistingNames().includes(value)) {
-      return { state: { ...state, error: `profile '@${value}' already exists (/manage to edit it)` }, done: false };
+      return { state: { ...state, error: t('setup.err.profileExists', { name: value }) }, done: false };
     }
   }
   const answers: WizardAnswers = { ...state.answers };
@@ -158,7 +162,7 @@ export function submitAnswer(state: WizardState, answer: string): { state: Wizar
     answers.authField = authOptionsFor(answers.protocol)[0] ?? 'bearer';
   }
   const nextIdx = state.stepIdx + 1;
-  if (nextIdx >= WIZARD_STEPS.length) {
+  if (nextIdx >= wizardSteps().length) {
     return { state: { stepIdx: nextIdx, answers, selIdx: 0 }, done: true };
   }
   const { error: _cleared, ...rest } = state;
@@ -198,7 +202,7 @@ export function renderWizard(state: WizardState, cols: number): string[] {
   const panelW = Math.min(cols, 64);
   const innerW = panelW - 4;
   const lines: string[] = [];
-  let title = state.editing !== undefined ? ` model setup · edit @${state.editing} ` : ' model setup ';
+  let title = ` ${state.editing !== undefined ? t('setup.titleEdit', { name: state.editing }) : t('setup.title')} `;
   // 窄终端保护：标题超宽时截断，fill 不得为负
   if (title.length > panelW - 6) title = title.slice(0, Math.max(1, panelW - 7));
   const fill = Math.max(0, panelW - 2 - title.length);
@@ -210,8 +214,8 @@ export function renderWizard(state: WizardState, cols: number): string[] {
     lines.push(`│ ${left}${right}${' '.repeat(pad)} │`);
   };
 
-  for (let i = 0; i < WIZARD_STEPS.length; i++) {
-    const step = WIZARD_STEPS[i]!;
+  for (let i = 0; i < wizardSteps().length; i++) {
+    const step = wizardSteps()[i]!;
     const color = STEP_COLORS[i]!;
     const isDone = i < state.stepIdx || (state.answers[step.id] !== undefined && i > state.stepIdx);
     const isCurrent = i === state.stepIdx;
@@ -243,7 +247,7 @@ export function renderWizard(state: WizardState, cols: number): string[] {
     }
 
     // 连接线：颜色 = 下一个流程点的颜色（点与线颜色互不相同）
-    if (i < WIZARD_STEPS.length - 1) {
+    if (i < wizardSteps().length - 1) {
       const lineColor = STEP_COLORS[i + 1]!;
       const isRailLive = i >= state.stepIdx - 1; // 当前步上下保持亮色
       const seg = isRailLive ? color256(lineColor, '│') : dim('│');
@@ -251,7 +255,7 @@ export function renderWizard(state: WizardState, cols: number): string[] {
       lines.push(`│ ${seg} ${' '.repeat(pad)} │`);
     }
   }
-  pushRow('', dim('Enter confirm · ↑↓ select · Esc cancel'));
+  pushRow('', dim(t('setup.footer')));
   lines.push(`╰${'─'.repeat(panelW - 2)}╯`);
   return lines;
 }

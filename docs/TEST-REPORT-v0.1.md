@@ -298,21 +298,53 @@ openai-compatible 新增 authStyle：x-api-key 头与 ?key= 查询参数按配�
 - 用量：25 requests · 216.6k in / 12.5k out · 缓存命中 46% · 费用 $0.0093；状态栏上下文 14.5k 与 `/status` 面板 14.9k 一致（估算误差 <3%）。
 - 权限审批（`--HuangAura`）：写操作弹出 `⚠ 权限请求`，`y` 本次允许后 write 执行、read 自动放行，最终回复正常。截图：`test/tui-real/02-code/`、`03-perm/`。
 
-## 12. 已知限制（v0.1 范围外，按 WBS 顺延）
+## 12. 双语 CLI / 联想弹层下移 / 开机按键跳过（v0.1 追加）
+
+### 12.1 双语支持（默认英语 + 中文支持板块）
+
+- 新增 `packages/cli/src/i18n/{en,zh,index}.ts`：英文目录为键集合的单一事实源，中文目录类型为 `Record<MsgKey, string>`（漏译即 typecheck 失败）；`t(key, vars)` 支持 `{name}` 插值，缺键回退英语。
+- 语言保存在 `~/.liwencode/config.json` 的 `language` 字段，启动时最先应用（早于 `--help`/参数错误/doctor 输出）。
+- `main.ts` 在解析参数前 `setLanguage(savedLanguage())`；TUI、REPL 与 `-p` 全部走同一语言。
+- 中文化范围：欢迎面板、状态栏、输入框标题、权限请求、全部信息面板（status/cost/tools/permissions/doctor/model/manage/help）、`/setup` 与 `/set-agents` 向导、斜杠命令说明、REPL 提示、CLI 用法、doctor 详情、错误提示（中文模式下 `LW-*` 用 09 §9.10 中文表）。英文目录不含中文句子（`language.*` 中的语言原名除外），由单测约束。
+- `/language` 指令：无参数进入问答（显示当前语言 + 两个选项），`/language en|zh` 直接指定；选择后**警告当前 CLI 会立即退出、下次启动生效**，确认后写入配置并退出（退出码 0），取消则不变；非法语言码拒绝。
+- 新增 10 项单测（目录完整性 / 无 CJK 泄漏 / 插值 / 持久化 / 不覆盖其他配置 / 损坏值回退），并更新受语言影响的 REPL、状态栏、档位、联想测试。
+
+### 12.2 指令联想层下移到输入框下方
+
+- `buildChromeFrame` 调整为：欢迎/向导 → 输入框(3) → **联想层** → 状态栏；光标仍定位在输入行。
+- 弹层在光标下方展开，帧变高时 `paintChromeFrame` 先 `CUU growth` 再清屏重画，保持**底部锚定**（输入框位置不跳动，状态栏始终在最底部）。
+- 可视行数上限调整为 `rows - 8`，避免弹层把帧顶出屏幕底部。
+
+### 12.3 开机动画按键跳过
+
+- 动画期间 `input.on('data')` 置 skip 标志，下一 tick 立即结束并清屏；按键被丢弃，不会进入输入框。
+- pty 实测：按键后 1.8s 内进入工作区（动画总时长 6.4s），界面无残影、无崩溃。
+
+### 12.4 pty 端到端验证（`test/tui-lang.py`，26/26 PASS）
+
+| 组 | 断言 |
+| --- | --- |
+| A 英语默认 | 弹层在输入框下方（候选行与标题均位于框底之下）、状态栏仍在最底部、全屏无任何中文字符、`/help`/`/model` 全英文、`/exit` 退出码 0 |
+| B 中文模式 | 欢迎面板/状态栏/联想/`/help`/`/status`/权限引导均为中文，且无 `Available commands`/`session`/`progress` 等英文界面词；`/exit` 正常 |
+| C `/language` | 面板显示当前语言与选项；警告包含“立即退出/下次启动”；确认后退出码 0 且 config 写入 `en`；重启后为英语；取消不改语言；非法语言码被拒绝 |
+| D 开机跳过 | 动画期间有粒子输出；任意键后 1.8s 进入工作区；无残影/崩溃 |
+
+## 13. 已知限制（v0.1 范围外，按 WBS 顺延）
 
 - 真实模型已验证 OpenAI ChatCompletion 一条链路（含工具调用/流式/思考/权限/费用）；OpenAI Responses 与 Gemini 原生适配器仍为 M2 规划，`/setup` 可保存配置但调用会抛 `LW-PRV-010`。
 - TUI 会话恢复 CLI、自动压缩、MCP、决策层、三角色编排未实现（M2~M4 范围）。
 - 评测集为 10 项种子，G1 要求的 30 项任务集在 M1 后续扩充。
 - 子目录级 AGENTS.md 惰性加载（DD-6）未实现；当前注入用户级 + 仓库根。
+- 语言覆盖 CLI 内置文案；模型/工具返回的数据文本与用户输入保持原样（属数据而非界面）。
 - 同步大文件读取期间 UI 短暂阻塞（v0.1 已知限制）。
 - CI 工作流已就绪（.github/workflows/ci.yml，ubuntu/macos × Node 22），推送后首跑验证。
 
-## 13. 复现命令
+## 14. 复现命令
 
 ```bash
 corepack pnpm install
 corepack pnpm typecheck      # 0 errors
-corepack pnpm test           # 248 passed
+corepack pnpm test           # 261 passed
 corepack pnpm lint:registry  # 79 codes OK
 corepack pnpm test:evals     # 10/10
 

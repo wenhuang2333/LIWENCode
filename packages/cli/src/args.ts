@@ -1,5 +1,7 @@
 /** Minimal hand-rolled arg parsing (no framework dep). Subset of FR-135 for v0.1. */
 
+import { t, type MsgKey } from './i18n/index.js';
+
 export interface CliArgs {
   positional: string[];
   print: boolean;
@@ -54,43 +56,10 @@ function tierOfMode(mode: 'strict' | 'default' | 'acceptEdits' | 'plan' | 'bypas
   }
 }
 
-export const USAGE = `liwen — LIWENCode coding agent CLI (v0.1 internal)
-
-Usage:
-  liwen [options] [prompt]        进入交互模式；带 prompt 则作为首轮输入
-  liwen -p "prompt"                非交互运行，输出结果后退出
-  liwen exec "prompt"              同 -p
-  liwen doctor                     环境与配置诊断
-  liwen config list|get|path       查看生效配置
-  liwen --version | --help
-
-交互模式内：
-  /help /model /permission /permissions /status /cost /tools /compact /clear /resume /doctor /exit
-  @路径          引用文件作为上下文      !命令  执行 shell（经权限审批）
-  Ctrl+C        生成中=取消本轮；空闲时按两次=退出
-  TTY 终端启动时播放粒子动画（--no-boot 跳过），随后进入常驻 TUI
-  完整指令集见 docs/COMMANDS.md
-
-权限档位（三选一，互斥）：
-  （无参数）                     严格档：一切操作（含读取）都需用户确认
-      --HuangAura                部分权限：读取免确认；写、删、执行仍需确认
-      --WenNova                  完全权限：文件增删改查读均免确认（危险命令仍拒绝）
-  也可用 --permission-mode <strict|default|acceptEdits|plan|bypass> 精确指定
-  会话内切换：/permission <档位>（如 /permission HuangAura；仅本次会话生效）
-
-Options:
-  -p, --print                      非交互执行
-  --output-format <text|json|stream-json>   结果格式（默认 text）
-  -m, --model <provider:model>      如 mock:default、deepseek:deepseek-chat、anthropic:claude-sonnet-4
-      --allowed-tools <patterns>   空格分隔的工具名/通配符
-      --disallowed-tools <pats>    拒绝覆盖（不可放宽内置硬拒绝）
-      --max-turns <n>              轮次上限（触发出码 4）
-      --max-budget-usd <amount>    费用上限
-      --cwd <path>                 工作区目录
-      --no-boot                    跳过 TUI 启动动画
-      --agents <name>              启动时激活 agent 群（common 角色成为执行模型）
-      --verbose                    stderr 诊断
-`;
+/** 帮助文本（按当前语言解析；保持在调用时生成，避免模块加载期冻结语言） */
+export function usageText(): string {
+  return t('usage.text');
+}
 
 export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
@@ -109,7 +78,7 @@ export function parseArgs(argv: string[]): CliArgs {
     i += 1;
     const v = argv[i];
     if (v === undefined) {
-      throw new UsageError(`missing value for ${flag}`);
+      throw new UsageError(t('args.missingValue', { flag }));
     }
     return v;
   };
@@ -148,7 +117,7 @@ export function parseArgs(argv: string[]): CliArgs {
       case '--output-format': {
         const v = next(a);
         if (v !== 'text' && v !== 'json' && v !== 'stream-json') {
-          throw new UsageError(`invalid --output-format '${v}' (LW-CLI-001)`);
+          throw new UsageError(t('args.invalidOutputFormat', { value: v }));
         }
         args.outputFormat = v;
         break;
@@ -160,7 +129,7 @@ export function parseArgs(argv: string[]): CliArgs {
       case '--permission-mode': {
         const v = next(a);
         if (v !== 'strict' && v !== 'default' && v !== 'acceptEdits' && v !== 'plan' && v !== 'bypass') {
-          throw new UsageError(`invalid --permission-mode '${v}' (LW-CLI-001)`);
+          throw new UsageError(t('args.invalidPermissionMode', { value: v }));
         }
         args.permissionMode = v;
         break;
@@ -169,13 +138,13 @@ export function parseArgs(argv: string[]): CliArgs {
       case '--wennova':
       case '--wen-nova':
         args.wenNova = true;
-        if (args.huangAura) throw new UsageError('--WenNova and --HuangAura are mutually exclusive (LW-CLI-001)');
+        if (args.huangAura) throw new UsageError(t('args.mutuallyExclusive'));
         break;
       case '--HuangAura':
       case '--huangaura':
       case '--huang-aura':
         args.huangAura = true;
-        if (args.wenNova) throw new UsageError('--WenNova and --HuangAura are mutually exclusive (LW-CLI-001)');
+        if (args.wenNova) throw new UsageError(t('args.mutuallyExclusive'));
         break;
       case '--allowed-tools':
         args.allowedTools.push(...untilNextFlag());
@@ -203,7 +172,7 @@ export function parseArgs(argv: string[]): CliArgs {
         break;
       default:
         if (a.startsWith('-')) {
-          throw new UsageError(`unknown option '${a}' (LW-CLI-001)`);
+          throw new UsageError(t('args.unknownOption', { option: a }));
         }
         args.positional.push(a);
         break;

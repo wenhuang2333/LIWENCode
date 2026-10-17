@@ -1,5 +1,6 @@
 import { displayWidth } from './width.js';
 import { artColors } from './terminal.js';
+import { t } from '../i18n/index.js';
 
 /**
  * 欢迎面板（Welcome Panel）：进入正式工作区时的初始区域（仿 Claude Code /
@@ -195,27 +196,27 @@ const yellow = (s: string) => `\x1b[33m${s}\x1b[39m`;
 /** 纯 ASCII 行（右列内容在构造期就控制在宽度内，无需 ANSI 感知截断） */
 function rightColumn(info: WelcomeInfo): string[] {
   const hints: [string, string][] = [
-    ['/help', 'all commands'],
-    ['/model', 'pick model'],
-    ['/status', 'session info'],
-    ['/exit', 'quit'],
+    ['/help', t('welcome.hintHelp')],
+    ['/model', t('welcome.hintModel')],
+    ['/status', t('welcome.hintStatus')],
+    ['/exit', t('welcome.hintExit')],
   ];
   const extra: [string, string][] = [
-    ['@file', 'attach file'],
-    ['!cmd', 'shell (gated)'],
-    ['Ctrl+C', 'cancel / x2 quit'],
+    ['@file', t('welcome.hintAt')],
+    ['!cmd', t('welcome.hintBang')],
+    ['Ctrl+C', t('welcome.hintCtrlC')],
   ];
   return [
     '',
-    bold('Welcome to LIWENCode'),
-    dim(`${info.version} · model ${cyan(info.model)}`),
-    dim(`permission: ${yellow(info.tier)}`),
+    bold(t('welcome.title')),
+    dim(t('welcome.version', { version: info.version, model: cyan(info.model) })),
+    dim(t('welcome.permission', { tier: yellow(info.tier) })),
     '',
     ...hints.map(([k, v]) => `  ${green(k.padEnd(9))} ${dim(v)}`),
     '',
     ...extra.map(([k, v]) => `  ${green(k.padEnd(9))} ${dim(v)}`),
     '',
-    dim('Type / for command palette'),
+    dim(t('welcome.typeSlash')),
   ];
 }
 

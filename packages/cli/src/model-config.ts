@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { t, type Lang, type MsgKey } from './i18n/index.js';
 
 /**
  * Provider catalog + user-facing model configuration (FR-135 /model).
@@ -11,7 +12,8 @@ import * as path from 'node:path';
 
 export interface ProviderCatalogEntry {
   id: string;
-  label: string;
+  /** 展示名（i18n 键，按当前语言解析） */
+  labelKey: MsgKey;
   kind: 'mock' | 'openai-compatible' | 'anthropic';
   apiKeyEnv: string | undefined;
   baseUrl: string;
@@ -22,7 +24,7 @@ export interface ProviderCatalogEntry {
 export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
   {
     id: 'mock',
-    label: 'Mock（离线脚本，无需密钥）',
+    labelKey: 'provider.mock.label',
     kind: 'mock',
     apiKeyEnv: undefined,
     baseUrl: '',
@@ -31,7 +33,7 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
   },
   {
     id: 'deepseek',
-    label: 'DeepSeek（OpenAI 兼容）',
+    labelKey: 'provider.deepseek.label',
     kind: 'openai-compatible',
     apiKeyEnv: 'DEEPSEEK_API_KEY',
     baseUrl: 'https://api.deepseek.com/v1',
@@ -40,7 +42,7 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
   },
   {
     id: 'openai-compatible',
-    label: 'OpenAI 及兼容端点',
+    labelKey: 'provider.openai.label',
     kind: 'openai-compatible',
     apiKeyEnv: 'OPENAI_API_KEY',
     baseUrl: 'https://api.openai.com/v1',
@@ -49,7 +51,7 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
   },
   {
     id: 'anthropic',
-    label: 'Anthropic（原生 Messages）',
+    labelKey: 'provider.anthropic.label',
     kind: 'anthropic',
     apiKeyEnv: 'ANTHROPIC_API_KEY',
     baseUrl: 'https://api.anthropic.com/v1',
@@ -57,6 +59,10 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
     needsKey: true,
   },
 ];
+
+export function providerLabel(entry: ProviderCatalogEntry): string {
+  return t(entry.labelKey);
+}
 
 export function catalogEntry(providerId: string): ProviderCatalogEntry | undefined {
   return PROVIDER_CATALOG.find((p) => p.id === providerId);
@@ -122,12 +128,25 @@ export interface ModelProfile {
 export interface UserConfigFile {
   model?: UserModelConfig;
   permissionMode?: 'strict' | 'default' | 'acceptEdits' | 'plan' | 'bypass';
+  /** CLI 语言（默认 en；/language 写入，下次启动生效） */
+  language?: Lang;
   /** /setup 创建的自定义模型档案，key = 请求名称（profile 名） */
   models?: Record<string, ModelProfile>;
   /** /set-agents 创建的 agent 群，key = 群名 */
   agentGroups?: Record<string, AgentGroup>;
   /** 当前激活的 agent 群（/model use @群名 或 --agents 设置） */
   activeAgentGroup?: string;
+}
+
+/** 已保存的 CLI 语言（缺省英语） */
+export function savedLanguage(home?: string): Lang {
+  const saved = readUserConfig(home).language;
+  return saved === 'zh' ? 'zh' : 'en';
+}
+
+/** 写入 CLI 语言（下次启动生效） */
+export function saveLanguage(lang: Lang, home?: string): void {
+  writeUserConfig({ ...readUserConfig(home), language: lang }, home);
 }
 
 // ── agent 群（/set-agents · /setting · /model） ──────────────────────────
@@ -361,9 +380,9 @@ export function loadSecretsIntoEnv(home?: string): number {
 }
 
 export function maskKey(value: string | undefined): string {
-  if (value === undefined || value === '') return '(未设置)';
+  if (value === undefined || value === '') return t('common.notSet');
   if (value.length <= 10) return `${value.slice(0, 2)}****`;
-  return `${value.slice(0, 5)}…${value.slice(-4)} (已设置)`;
+  return t('key.masked', { prefix: value.slice(0, 5), suffix: value.slice(-4) });
 }
 
 export function keyStatusOf(entry: ProviderCatalogEntry, home?: string): { set: boolean; source: 'process-env' | 'env-file' | 'none' } {

@@ -17,10 +17,22 @@ const entry = path.join(repoRoot, 'packages', 'cli', 'src', 'main.ts');
 
 function runRepl(
   commands: string[],
-  options: { env?: Record<string, string | undefined>; argv?: string[]; cwd?: string } = {},
+  options: {
+    env?: Record<string, string | undefined>;
+    argv?: string[];
+    cwd?: string;
+    language?: 'en' | 'zh';
+  } = {},
 ): { stdout: string; code: number } {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'liwen-repl-'));
   try {
+    if (options.language !== undefined) {
+      fs.mkdirSync(path.join(home, '.liwencode'), { recursive: true });
+      fs.writeFileSync(
+        path.join(home, '.liwencode', 'config.json'),
+        JSON.stringify({ language: options.language }),
+      );
+    }
     const stdout = execFileSync(tsx, [entry, ...(options.argv ?? [])], {
       input: commands.join('\n'),
       encoding: 'utf8',
@@ -46,11 +58,11 @@ function runRepl(
 describe('interactive REPL (piped smoke, FR-130/137)', () => {
   it('banner + /help + /status + /exit', () => {
     const { stdout } = runRepl(['/help', '/status', '/exit']);
-    expect(stdout).toContain('LIWENCode v0.1 交互模式');
+    expect(stdout).toContain('LIWENCode v0.1 interactive mode');
     expect(stdout).toContain('/model');
-    expect(stdout).toContain('会话:');
+    expect(stdout).toContain('Session:');
     expect(stdout).toContain('mock:default');
-    expect(stdout).toContain('再见');
+    expect(stdout).toContain('Goodbye.');
   }, 90_000);
 
   it('mock conversation renders streamed reply', () => {
@@ -59,7 +71,7 @@ describe('interactive REPL (piped smoke, FR-130/137)', () => {
     ]);
     const { stdout } = runRepl(['打个招呼', '/exit'], { env: { LIWEN_MOCK_SCRIPT: script } });
     expect(stdout).toContain('你好，来自 mock 的回复');
-    expect(stdout).toContain('再见');
+    expect(stdout).toContain('Goodbye.');
   }, 90_000);
 
   it('headless permission policy denies write with LW-CLI-002 notice (BR-042)', () => {
@@ -68,22 +80,22 @@ describe('interactive REPL (piped smoke, FR-130/137)', () => {
       { id: 'a2', role: 'assistant', content: [{ type: 'text', text: '写入被拒' }], meta: { createdAt: 0 } },
     ]);
     const { stdout } = runRepl(['写点东西', '/exit'], { env: { LIWEN_MOCK_SCRIPT: script } });
-    expect(stdout).toContain('无人值守');
+    expect(stdout).toContain('headless mode auto-denies');
     expect(stdout).toContain('LW-CLI-002');
   }, 90_000);
 
   it('/model show + /model list render catalog and key status', () => {
     const { stdout } = runRepl(['/model', '/model list', '/exit']);
-    expect(stdout).toContain('当前模型');
+    expect(stdout).toContain('Current model');
     expect(stdout).toContain('deepseek:deepseek-chat');
-    expect(stdout).toContain('Provider 目录');
+    expect(stdout).toContain('Provider catalog');
   }, 90_000);
 
   it('/permissions shows mode and switches it (bare launch starts at strict)', () => {
     const { stdout } = runRepl(['/permissions', '/permissions mode acceptEdits', '/permissions', '/exit']);
-    expect(stdout).toContain('权限模式: strict');
-    expect(stdout).toContain('已切换为 acceptEdits');
-    expect(stdout).toContain('权限模式: acceptEdits');
+    expect(stdout).toContain('Permission mode: strict');
+    expect(stdout).toContain('switched to acceptEdits');
+    expect(stdout).toContain('Permission mode: acceptEdits');
   }, 90_000);
 
   it('/permission switches the three-tier level directly (strict/HuangAura/WenNova)', () => {
@@ -97,28 +109,28 @@ describe('interactive REPL (piped smoke, FR-130/137)', () => {
       '/exit',
     ]);
     // 无参数：档位速查面板（含三档）
-    expect(stdout).toContain('权限档位（/permission <档位> 直接切换');
+    expect(stdout).toContain('Permission tiers (/permission <tier> switches immediately');
     expect(stdout).toContain('strict');
     expect(stdout).toContain('WenNova');
     // 直接切换三档
-    expect(stdout).toContain('权限档位已切换为 HuangAura（部分权限：读免确认）');
-    expect(stdout).toContain('权限模式: default');
-    expect(stdout).toContain('权限档位已切换为 WenNova（完全权限：免确认）');
-    expect(stdout).toContain('权限档位已切换为 strict（严格档：均需确认）');
+    expect(stdout).toContain('Permission tier switched to HuangAura');
+    expect(stdout).toContain('Permission mode: default');
+    expect(stdout).toContain('Permission tier switched to WenNova');
+    expect(stdout).toContain('Permission tier switched to strict');
     // 非法参数给出用法
-    expect(stdout).toContain('用法: /permission [strict|HuangAura|WenNova]');
+    expect(stdout).toContain('Usage: /permission [strict|HuangAura|WenNova]');
   }, 90_000);
 
   it('!command runs read-only shell through the gate; dangerous is refused', () => {
     const { stdout } = runRepl(['!echo liwen-shell-ok', '!rm -rf /', '/exit'], { argv: ['--HuangAura'] });
     expect(stdout).toContain('liwen-shell-ok');
-    expect(stdout).toContain('拒绝');
+    expect(stdout).toContain('Denied');
     expect(stdout).toContain('LW-PERM-004');
   }, 90_000);
 
   it('planned commands are clearly stubbed', () => {
     const { stdout } = runRepl(['/mcp', '/goal', '/exit']);
-    expect(stdout).toContain('后续里程碑');
+    expect(stdout).toContain('later milestone');
   }, 90_000);
 
   it('/doctor inside the REPL matches the doctor subcommand', () => {
@@ -140,7 +152,7 @@ describe('interactive REPL (piped smoke, FR-130/137)', () => {
 
   it('bare launch (strict tier): even reads are asked → headless auto-deny (LW-CLI-002)', () => {
     const { stdout } = runRepl(['读一下 tier.txt', '/exit'], { env: { LIWEN_MOCK_SCRIPT: readScript } });
-    expect(stdout).toContain('无人值守');
+    expect(stdout).toContain('headless mode auto-denies');
     expect(stdout).toContain('LW-CLI-002');
     expect(stdout).toContain('读取完成'); // model still recovers and finishes
   }, 90_000);
@@ -185,10 +197,23 @@ describe('interactive REPL (piped smoke, FR-130/137)', () => {
 
   it('banner shows the active permission tier', () => {
     const strict = runRepl(['/exit']);
-    expect(strict.stdout).toContain('严格档');
+    expect(strict.stdout).toContain('strict: every action requires confirmation');
     const nova = runRepl(['/exit'], { argv: ['--WenNova'] });
-    expect(nova.stdout).toContain('完全权限');
+    expect(nova.stdout).toContain('full (--WenNova)');
     const aura = runRepl(['/exit'], { argv: ['--HuangAura'] });
-    expect(aura.stdout).toContain('部分权限');
+    expect(aura.stdout).toContain('partial (--HuangAura)');
+  }, 120_000);
+
+  it('persisted language=zh switches the whole REPL to Chinese (and back)', () => {
+    const zh = runRepl(['/help', '/status', '/exit'], { language: 'zh' });
+    expect(zh.stdout).toContain('LIWENCode v0.1 交互模式');
+    expect(zh.stdout).toContain('可用命令');
+    expect(zh.stdout).toContain('会话：');
+    expect(zh.stdout).toContain('再见。');
+    expect(zh.stdout).not.toContain('Available commands');
+
+    const en = runRepl(['/help', '/exit'], { language: 'en' });
+    expect(en.stdout).toContain('Available commands');
+    expect(en.stdout).not.toContain('可用命令');
   }, 120_000);
 });

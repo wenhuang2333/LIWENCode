@@ -1,9 +1,10 @@
 /**
  * 信息类命令的 TUI 面板内容（/status /cost /tools /permissions /doctor /
  * /model /manage /help）。TUI 通过 printAbove 输出，REPL 直接逐行输出；
- * 纯函数，便于单测。
+ * 纯函数，便于单测。所有标签走 i18n（数据值保持原样）。
  */
 
+import { t } from './i18n/index.js';
 import { C, badge, bar, kv, panel, section, table } from './tui/panel.js';
 
 export interface StatusData {
@@ -24,17 +25,17 @@ export interface StatusData {
 export function statusPanel(d: StatusData): string[] {
   const ratio = d.contextWindow > 0 ? d.contextTokens / d.contextWindow : 0;
   const pct = Math.min(100, Math.round(ratio * 100));
-  return panel('status', [
-    section('session'),
-    kv('session', C.cyan(d.sessionId), 10),
-    kv('model', C.bold(d.model), 10),
-    kv('mode', `${C.yellow(d.mode)} ${C.dim(`(${d.tier})`)}`, 10),
-    ...(d.activeGroup !== undefined ? [kv('agents', `${C.magenta('@' + d.activeGroup)} ${C.dim('(group active)')}`, 10)] : []),
+  return panel(t('panel.status'), [
+    section(t('sect.session')),
+    kv(t('tbl.session'), C.cyan(d.sessionId), 10),
+    kv(t('tbl.model'), C.bold(d.model), 10),
+    kv(t('sect.mode'), `${C.yellow(d.mode)} ${C.dim(`(${d.tier})`)}`, 10),
+    ...(d.activeGroup !== undefined ? [kv(t('val.agents'), `${C.magenta('@' + d.activeGroup)} ${C.dim(t('val.groupActive'))}`, 10)] : []),
     '',
-    section('progress'),
-    kv('turns', `${C.bold(String(d.turns))} ${C.dim(`assistant messages · ${d.historyCount} history entries`)}`, 10),
-    kv('context', `${C.bold(formatTok(d.contextTokens))} / ${formatTok(d.contextWindow)}  ${bar(ratio, 24, ratio > 0.85 ? 196 : ratio > 0.6 ? 214 : 45)} ${C.dim(`${pct}%`)}`, 10),
-    kv('usage', `${C.dim(`${d.requests} requests · ${formatTok(d.inputTokens)} in / ${formatTok(d.outputTokens)} out`)}`, 10),
+    section(t('sect.progress')),
+    kv(t('tbl.turns'), `${C.bold(String(d.turns))} ${C.dim(t('val.assistantMessages', { n: d.historyCount }))}`, 10),
+    kv(t('tbl.context'), `${C.bold(formatTok(d.contextTokens))} / ${formatTok(d.contextWindow)}  ${bar(ratio, 24, ratio > 0.85 ? 196 : ratio > 0.6 ? 214 : 45)} ${C.dim(`${pct}%`)}`, 10),
+    kv(t('tbl.usage'), `${C.dim(t('val.requestsInOut', { requests: d.requests, input: formatTok(d.inputTokens), output: formatTok(d.outputTokens) }))}`, 10),
   ]);
 }
 
@@ -51,17 +52,17 @@ export interface CostData {
 export function costPanel(d: CostData): string[] {
   const total = d.inputTokens + d.outputTokens + d.cacheReadTokens;
   const share = (n: number) => (total > 0 ? n / total : 0);
-  return panel('cost', [
-    section('tokens'),
-    kv('input', `${C.bold(formatTok(d.inputTokens))}  ${bar(share(d.inputTokens), 20, 45)}`, 10),
-    kv('output', `${C.bold(formatTok(d.outputTokens))}  ${bar(share(d.outputTokens), 20, 46)}`, 10),
-    kv('cache rd', `${C.bold(formatTok(d.cacheReadTokens))}  ${bar(share(d.cacheReadTokens), 20, 213)}`, 10),
-    ...(d.cacheWriteTokens > 0 ? [kv('cache wr', C.bold(formatTok(d.cacheWriteTokens)), 10)] : []),
-    kv('total', C.bold(formatTok(total)), 10),
+  return panel(t('panel.cost'), [
+    section(t('sect.tokens')),
+    kv(t('tbl.input'), `${C.bold(formatTok(d.inputTokens))}  ${bar(share(d.inputTokens), 20, 45)}`, 10),
+    kv(t('tbl.output'), `${C.bold(formatTok(d.outputTokens))}  ${bar(share(d.outputTokens), 20, 46)}`, 10),
+    kv(t('tbl.cacheRd'), `${C.bold(formatTok(d.cacheReadTokens))}  ${bar(share(d.cacheReadTokens), 20, 213)}`, 10),
+    ...(d.cacheWriteTokens > 0 ? [kv(t('tbl.cacheWr'), C.bold(formatTok(d.cacheWriteTokens)), 10)] : []),
+    kv(t('tbl.total'), C.bold(formatTok(total)), 10),
     '',
-    section('billing'),
-    kv('requests', String(d.requests), 10),
-    kv('cost', d.priced ? C.green(`$${d.costUsd.toFixed(4)}`) : C.dim('(provider provides no pricing)'), 10),
+    section(t('sect.billing')),
+    kv(t('tbl.requests'), String(d.requests), 10),
+    kv(t('tbl.cost'), d.priced ? C.green(`$${d.costUsd.toFixed(4)}`) : C.dim(t('val.noPricing')), 10),
   ]);
 }
 
@@ -73,13 +74,16 @@ export interface ToolInfo {
 }
 
 export function toolsPanel(tools: readonly ToolInfo[]): string[] {
-  const rows = tools.map((t) => [
-    C.cyan(t.name),
-    t.risk === 'exec' ? C.yellow(t.risk) : t.risk === 'write' ? C.magenta(t.risk) : C.green(t.risk),
-    t.readOnly ? 'yes' : C.dim('no'),
-    t.concurrencySafe ? 'yes' : C.dim('no'),
+  const rows = tools.map((tool) => [
+    C.cyan(tool.name),
+    tool.risk === 'exec' ? C.yellow(tool.risk) : tool.risk === 'write' ? C.magenta(tool.risk) : C.green(tool.risk),
+    tool.readOnly ? t('val.yes') : C.dim(t('val.no')),
+    tool.concurrencySafe ? t('val.yes') : C.dim(t('val.no')),
   ]);
-  return panel('tools', [section(`${tools.length} registered`), ...table(['name', 'risk', 'readonly', 'parallel'], rows)]);
+  return panel(t('panel.tools'), [
+    section(t('val.registered', { n: tools.length })),
+    ...table([t('tbl.name'), t('tbl.risk'), t('tbl.readonly'), t('tbl.parallel')], rows),
+  ]);
 }
 
 export interface PermRule {
@@ -96,12 +100,12 @@ export function permissionsPanel(mode: string, tier: string, rules: readonly Per
     r.command !== undefined ? C.dim(`cmd=${r.command}`) : '',
     r.path !== undefined ? C.dim(`path=${r.path}`) : '',
   ]);
-  return panel('permissions', [
-    section('mode'),
+  return panel(t('panel.permissions'), [
+    section(t('sect.mode')),
     `${badge(mode, mode === 'bypass' ? 46 : mode === 'strict' ? 196 : 214)}  ${C.dim(tier)}`,
     '',
-    section(`session rules (${rules.length})`),
-    ...(rules.length > 0 ? table(['effect', 'tool', 'match'], rows, { headerColor: 45 }) : [C.dim('(none — use /permissions allow|deny <tool>)')]),
+    section(t('val.sessionRules', { n: rules.length })),
+    ...(rules.length > 0 ? table([t('tbl.effect'), t('tbl.tool'), t('tbl.match')], rows, { headerColor: 45 }) : [C.dim(t('val.noneRules'))]),
   ]);
 }
 
@@ -118,9 +122,9 @@ export function doctorPanel(checks: readonly DoctorCheck[]): string[] {
     c.status === 'fail' ? C.red(c.detail) : C.dim(c.detail),
   ]);
   const failed = checks.filter((c) => c.status === 'fail').length;
-  return panel('doctor', [
-    section(failed === 0 ? 'all checks passed' : `${failed} check(s) failed`),
-    ...table(['', 'check', 'detail'], rows, { divider: false }),
+  return panel(t('panel.doctor'), [
+    section(failed === 0 ? t('val.allChecksPassed') : t('val.checksFailed', { n: failed })),
+    ...table(['', t('tbl.check'), t('tbl.detail')], rows, { divider: false }),
   ]);
 }
 
@@ -136,7 +140,7 @@ export function modelPanel(o: ModelOverview): string[] {
   const catRows = o.catalog.map((p) => [
     C.cyan(p.id),
     C.dim(p.models.join(' · ')),
-    p.keySet ? C.green('key ✔') : C.yellow('key ✘'),
+    p.keySet ? C.green(`${t('tbl.key')} ✔`) : C.yellow(`${t('tbl.key')} ✘`),
   ]);
   const profRows = o.profiles.map((p) => [C.magenta(`@${p.name}`), C.dim(p.protocol), p.model, p.keySet ? C.green('✔') : C.yellow('✘')]);
   const groupRows = o.groups.map((g) => [
@@ -145,20 +149,20 @@ export function modelPanel(o: ModelOverview): string[] {
     C.c256(213, g.sota),
     C.c256(46, g.common),
   ]);
-  return panel('model', [
-    section('current'),
-    `${C.bold(o.current)}${o.activeGroup !== undefined ? `   ${C.dim('agents:')} ${C.magenta('@' + o.activeGroup)}` : ''}`,
+  return panel(t('panel.model'), [
+    section(t('sect.current')),
+    `${C.bold(o.current)}${o.activeGroup !== undefined ? `   ${C.dim(t('val.agents'))} ${C.magenta('@' + o.activeGroup)}` : ''}`,
     '',
-    section('built-in providers'),
-    ...table(['provider', 'models (select with provider:model)', 'auth'], catRows),
+    section(t('sect.providers')),
+    ...table([t('tbl.provider'), t('tbl.models'), t('tbl.auth')], catRows),
     '',
-    section(`custom profiles (${o.profiles.length})`),
-    ...(o.profiles.length > 0 ? table(['profile', 'protocol', 'model', 'key'], profRows) : [C.dim('(none — run /setup to create one)')]),
+    section(t('sect.profiles', { n: o.profiles.length })),
+    ...(o.profiles.length > 0 ? table([t('tbl.profile'), t('tbl.protocol'), t('tbl.model'), t('tbl.key')], profRows) : [C.dim(t('val.noneProfiles'))]),
     '',
-    section(`agent groups (${o.groups.length})`),
-    ...(o.groups.length > 0 ? table(['group', 'hyaki', 'sota', 'common'], groupRows) : [C.dim('(none — run /set-agents to build one)')]),
+    section(t('sect.groups', { n: o.groups.length })),
+    ...(o.groups.length > 0 ? table([t('tbl.group'), 'hyaki', 'sota', 'common'], groupRows) : [C.dim(t('val.noneGroups'))]),
     '',
-    C.dim('/model use <provider:model | @profile | @group>  ·  /setup  ·  /set-agents  ·  /manage'),
+    C.dim(t('val.modelUseHint')),
   ]);
 }
 
@@ -170,11 +174,11 @@ export function managePanel(profiles: { name: string; protocol: string; model: s
     p.keySet ? C.green('✔') : C.yellow('✘'),
     C.dim(new Date(p.updatedAt).toLocaleString()),
   ]);
-  return panel('manage', [
-    section(`${profiles.length} model profile(s)`),
-    ...table(['profile', 'protocol', 'model', 'key', 'updated'], rows),
+  return panel(t('panel.manage'), [
+    section(t('val.profilesCount', { n: profiles.length })),
+    ...table([t('tbl.profile'), t('tbl.protocol'), t('tbl.model'), t('tbl.key'), t('tbl.updated')], rows),
     '',
-    C.dim('edit / delete: /manage <name>'),
+    C.dim(t('val.manageHint')),
   ]);
 }
 
@@ -184,24 +188,24 @@ export interface HelpEntry {
 }
 
 export function helpPanel(available: readonly HelpEntry[], planned: readonly { name: string; summary: string; since: string }[]): string[] {
-  return panel('help', [
-    section('commands'),
-    ...table(['command', 'summary'], available.map((c) => [C.cyan(c.usage), c.summary])),
+  return panel(t('panel.help'), [
+    section(t('sect.commands')),
+    ...table([t('tbl.command'), t('tbl.summary')], available.map((c) => [C.cyan(c.usage), c.summary])),
     '',
-    section('input syntax'),
+    section(t('sect.syntax')),
     ...table(
-      ['syntax', 'meaning'],
+      [t('tbl.syntax'), t('tbl.meaning')],
       [
-        [C.cyan('@path'), 'attach file contents to the prompt (max 8 files, 500 lines each)'],
-        [C.cyan('!cmd'), 'propose a shell command (still permission-gated)'],
-        [C.cyan('/cmd'), 'slash commands: ↑↓ palette · Tab/Enter complete · Esc close'],
-        [C.cyan('Ctrl+C'), 'cancel current turn; press twice when idle to quit'],
+        [C.cyan('@path'), t('val.helpAt')],
+        [C.cyan('!cmd'), t('val.helpBang')],
+        [C.cyan('/cmd'), t('val.helpSlash')],
+        [C.cyan('Ctrl+C'), t('val.helpCtrlC')],
       ],
       { divider: false },
     ),
     '',
-    section('planned'),
-    ...table(['command', 'plan'], planned.map((p) => [C.dim(p.name), C.dim(`${p.summary} (${p.since})`)]), { divider: false }),
+    section(t('sect.planned')),
+    ...table([t('tbl.command'), t('tbl.plan')], planned.map((p) => [C.dim(p.name), C.dim(t('val.plannedLine', { summary: p.summary, since: p.since }))]), { divider: false }),
   ]);
 }
 

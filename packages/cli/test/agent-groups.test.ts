@@ -12,8 +12,8 @@ import {
   type AgentGroup,
 } from '../src/model-config';
 import {
-  GROUP_STEPS,
-  NEW_GROUP_SENTINEL,
+  groupSteps,
+  newGroupSentinel,
   moveSelection,
   newGroupWizard,
   optionsOf,
@@ -86,12 +86,12 @@ describe('tui/agent-wizard 群向导', () => {
   });
 
   it('步骤结构：目标→命名→三角色', () => {
-    expect(GROUP_STEPS.map((s) => s.id)).toEqual(['target', 'name', 'hyaki', 'sota', 'common']);
+    expect(groupSteps().map((s) => s.id)).toEqual(['target', 'name', 'hyaki', 'sota', 'common']);
   });
 
   it('有群时先选目标：选已有群进入编辑并预填角色与高亮', () => {
     let w = newGroupWizard();
-    expect(optionsOf(w)).toEqual(['existing', NEW_GROUP_SENTINEL]);
+    expect(optionsOf(w)).toEqual(['existing', newGroupSentinel()]);
     const r = submitStep(w, '');
     expect(r.state.editing).toBe('existing');
     expect(r.state.answers.hyaki).toBe('mock:default');
@@ -107,7 +107,7 @@ describe('tui/agent-wizard 群向导', () => {
   it('新建群完整流程：命名→三角色选择（允许同模型多角色）→done', () => {
     let w = newGroupWizard();
     w = moveSelection(w, 1); // 选中 ＋ create a new group
-    expect(optionsOf(w)[w.selIdx]).toBe(NEW_GROUP_SENTINEL);
+    expect(optionsOf(w)[w.selIdx]).toBe(newGroupSentinel());
     let r = submitStep(w, '');
     expect(r.state.stepIdx).toBe(1); // name
     r = submitStep(r.state, 'team');

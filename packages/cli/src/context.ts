@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { ContextConfig } from '@liwencode/core';
+import { t } from './i18n/index.js';
 
 /**
  * 系统提示上下文装配（FR-051 / FR-083 / DD-6）：
@@ -38,7 +39,7 @@ export function readInstructionFile(
       let text = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '').trim();
       if (text === '') continue;
       if (Buffer.byteLength(text, 'utf8') > MAX_INSTRUCTION_BYTES) {
-        text = `${Buffer.from(text, 'utf8').subarray(0, MAX_INSTRUCTION_BYTES).toString('utf8')}\n\n[truncated at ${MAX_INSTRUCTION_BYTES} bytes]`;
+        text = `${Buffer.from(text, 'utf8').subarray(0, MAX_INSTRUCTION_BYTES).toString('utf8')}\n\n${t('context.truncated', { bytes: MAX_INSTRUCTION_BYTES })}`;
       }
       return { file, text };
     } catch {
@@ -66,11 +67,11 @@ export function buildCliContext(cwd: string, opts: CliContextOptions = {}): Cont
   const segments: string[] = [];
   const userFile = readInstructionFile(path.join(home, '.liwencode'), names);
   if (userFile !== undefined) {
-    segments.push(`# User instructions (${path.basename(userFile.file)})\n\n${userFile.text}`);
+    segments.push(`${t('context.userInstructions', { file: path.basename(userFile.file) })}\n\n${userFile.text}`);
   }
   const projectFile = readInstructionFile(cwd, names);
   if (projectFile !== undefined) {
-    segments.push(`# Project instructions (${projectFile.file})\n\n${projectFile.text}`);
+    segments.push(`${t('context.projectInstructions', { file: projectFile.file })}\n\n${projectFile.text}`);
   }
 
   const environmentInfo = [

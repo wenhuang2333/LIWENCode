@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import type { AgentEvent, Usage } from '@liwencode/core';
 import { StatusTracker, estimateTokensOfText, formatStatusLine, formatTokens } from '../src/tui/status';
+import { setLanguage } from '../src/i18n/index';
 import { displayWidth } from '../src/tui/width';
 
 function usageEv(u: Partial<Usage>): AgentEvent {
@@ -8,6 +9,7 @@ function usageEv(u: Partial<Usage>): AgentEvent {
 }
 
 describe('tui/status 状态指标', () => {
+  beforeEach(() => setLanguage('en'));
   it('formatTokens 分级缩写', () => {
     expect(formatTokens(999)).toBe('999');
     expect(formatTokens(1500)).toBe('1.5k');
@@ -84,19 +86,33 @@ describe('tui/status 状态指标', () => {
     t.onEvent({ type: 'tool.start', callId: 'c', name: 'read', input: {} }, 0);
     const line = formatStatusLine(t.snapshot(0), 200);
     expect(line).toContain('deepseek:deepseek-chat');
-    expect(line).toContain('上下文');
-    expect(line).toContain('轮次 1:1');
-    expect(line).toContain('缓存');
-    expect(line).toContain('总token');
+    expect(line).toContain('context');
+    expect(line).toContain('turn 1:1');
+    expect(line).toContain('cache');
+    expect(line).toContain('total tokens');
 
     const narrow = formatStatusLine(t.snapshot(0), 30);
     expect(displayWidth(narrow)).toBeLessThanOrEqual(30);
   });
 
+  it('中文模式状态行（/language zh）', () => {
+    setLanguage('zh');
+    const t = new StatusTracker({ model: 'mock:default', contextWindow: 1000 });
+    t.onEvent(usageEv({ inputTokens: 10, outputTokens: 5 }), 0);
+    const line = formatStatusLine(t.snapshot(0), 200);
+    expect(line).toContain('模型 mock:default');
+    expect(line).toContain('上下文');
+    expect(line).toContain('轮次');
+    expect(line).toContain('速度');
+    expect(line).toContain('缓存');
+    expect(line).toContain('总 token');
+    setLanguage('en');
+  });
+
   it('速度字段：null → 破折号', () => {
     const t = new StatusTracker({ model: 'mock:default', contextWindow: 1000 });
     const line = formatStatusLine(t.snapshot(0), 200);
-    expect(line).toContain('速度 —');
-    expect(line).toContain('缓存 —');
+    expect(line).toContain('speed —');
+    expect(line).toContain('cache —');
   });
 });

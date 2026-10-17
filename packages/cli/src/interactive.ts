@@ -29,8 +29,10 @@ import {
   liwenHome,
   maskKey,
   PROVIDER_CATALOG,
+  providerLabel,
   readUserConfig,
   resolveDefaultModel,
+  saveLanguage,
   writeEnvFile,
   writeUserConfig,
   parseEnvFile,
@@ -38,6 +40,8 @@ import {
 import { formatDoctor, runDoctor } from './doctor.js';
 import { expandAtPaths, summarizeInput } from './prompt-utils.js';
 import { buildCliContext } from './context.js';
+import { getLanguage, isLang, languageName, t, type Lang } from './i18n/index.js';
+import { userErrorMessage, userErrorText, userEventErrorText } from './error-text.js';
 
 /**
  * Interactive REPL (FR-130 / FR-137 subset). Readline-based: streaming
@@ -134,25 +138,25 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const preview = previewOfRequest(req);
     if (!isTTY) {
       // Headless (piped stdin): BR-042 — ask resolves to deny, never block.
-      output.write(ANSI.yellow(`⚠ 权限请求（无人值守模式自动拒绝）: ${preview}\n`));
+      output.write(ANSI.yellow(`${t('permission.headless', { preview })}\n`));
       return { decision: 'deny', message: 'Non-interactive session: approval unavailable (LW-CLI-002). Pre-approve via /permissions allow or --allowed-tools.' };
     }
-    output.write(`\n${ANSI.yellow('⚠ 权限请求')} ${preview}\n`);
+    output.write(`\n${ANSI.yellow(t('permission.request'))} ${preview}\n`);
     rl.resume();
-    if (rlClosed) return { decision: 'deny', message: '输入已关闭，无法审批，按拒绝处理。' };
-    const answer = (await rl.question('  允许执行? [y]本次允许 / [s]本次会话均允许 / [n]拒绝 (默认 n): ')).trim().toLowerCase();
+    if (rlClosed) return { decision: 'deny', message: t('permission.inputClosed') };
+    const answer = (await rl.question(t('permission.prompt'))).trim().toLowerCase();
     rl.pause();
     if (answer === 'y') return { decision: 'allow' };
     if (answer === 's') return { decision: 'allow', remember: 'session' };
-    return { decision: 'deny', message: '用户拒绝了该操作。' };
+    return { decision: 'deny', message: t('permission.deniedByUser') };
   }
 
   function previewOfRequest(req: PermissionRequest): string {
     const s = req.subject;
-    if (s.command !== undefined) return `${req.tool} 执行 ${ANSI.bold(s.command)}（${req.risk}）`;
-    if (s.path !== undefined) return `${req.tool} 写入 ${ANSI.bold(s.path)}（${req.risk}）`;
-    if (s.url !== undefined) return `${req.tool} 访问 ${ANSI.bold(s.url)}（${req.risk}）`;
-    return `${req.tool}（${req.risk}）`;
+    if (s.command !== undefined) return t('permission.subject.command', { tool: req.tool, command: ANSI.bold(s.command), risk: req.risk });
+    if (s.path !== undefined) return t('permission.subject.path', { tool: req.tool, path: ANSI.bold(s.path), risk: req.risk });
+    if (s.url !== undefined) return t('permission.subject.url', { tool: req.tool, url: ANSI.bold(s.url), risk: req.risk });
+    return t('permission.subject.generic', { tool: req.tool, risk: req.risk });
   }
 
   // ── run one turn ───────────────────────────────────────────────────────
@@ -171,7 +175,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         if (r.done) {
           const summary = r.value;
           if (summary.endReason !== 'completed' && summary.endReason !== 'aborted') {
-            output.write(`\n${ANSI.yellow(`本轮结束: ${summary.endReason}`)}\n`);
+            output.write(`\n${ANSI.yellow(t('error.turnEnded', { reason: summary.endReason }))}\n`);
           }
           break;
         }
@@ -180,8 +184,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       }
     } catch (e) {
       output.write('\n');
-      if (LiwenError.is(e)) output.write(ANSI.red(`错误 ${e.code}: ${e.message}\n`));
-      else output.write(ANSI.red(`错误: ${e instanceof Error ? e.message : String(e)}\n`));
+      output.write(ANSI.red(`${userErrorText(e)}\n`));
     } finally {
       if (inText) output.write('\n');
       activeAbort = undefined;
@@ -219,10 +222,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           break;
         }
         case 'budget.warning':
-          output.write(ANSI.yellow(`  ⚠ 预算已达 ${Math.round(ev.ratio * 100)}%\n`));
+          output.write(ANSI.yellow(`  ${t('error.budget', { pct: Math.round(ev.ratio * 100) })}\n`));
           break;
         case 'error':
-          output.write(ev.fatal ? ANSI.red(`  ✖ ${ev.error.code} ${ev.error.message}\n`) : ANSI.yellow(`  ⚠ ${ev.error.code} ${ev.error.message}\n`));
+          const msg = `${ev.error.code} ${userEventErrorText(ev.error.code, ev.error.message)}`;
+          output.write(ev.fatal ? ANSI.red(`  ✖ ${msg}\n`) : ANSI.yellow(`  ⚠ ${msg}\n`));
           break;
         default:
           break;
@@ -245,9 +249,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       try {
         const content = await runtime.fs.readFile(abs);
         const truncated = content.split('\n').slice(0, 500).join('\n');
-        parts.push(`--- @${ref} ---\n${truncated}${content.split('\n').length > 500 ? '\n… [截断至 500 行]' : ''}`);
+        parts.push(`--- @${ref} ---\n${truncated}${content.split('\n').length > 500 ? `\n${t('repl.truncated')}` : ''}`);
       } catch {
-        parts.push(`--- @${ref} --- (文件不存在或不可读，已跳过)`);
+        parts.push(`--- @${ref} --- ${t('repl.fileSkipped')}`);
       }
     }
     return parts.join('\n\n');
@@ -258,7 +262,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const engine = agent.engine;
     const outcome = await engine.checkSubject('bash', 'exec', { command });
     if (outcome.outcome === 'deny') {
-      output.write(ANSI.red(`✖ 拒绝 [${outcome.error.code}]: ${outcome.error.modelMessage ?? outcome.error.message}\n`));
+      output.write(ANSI.red(`${t('error.denied', { code: outcome.error.code, message: outcome.error.modelMessage ?? userEventErrorText(outcome.error.code, outcome.error.message) })}\n`));
       return;
     }
     const proc = runtime.shell.spawn('/bin/sh', ['-c', command], { cwd, timeoutMs: 60_000 });
@@ -267,7 +271,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       for await (const line of s) out += `${line}\n`;
     };
     const code = await Promise.all([proc.exited, collect(proc.stdout), collect(proc.stderr)]).then(([c]) => c);
-    output.write(ANSI.dim(`exit=${code}\n${out.slice(0, 2000)}`));
+    output.write(ANSI.dim(`${t('error.exitCode', { code })}\n${out.slice(0, 2000)}`));
   }
 
   // ── slash handlers ─────────────────────────────────────────────────────
@@ -299,9 +303,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case '/compact':
         cmdCompact();
         return;
+      case '/language':
+        await cmdLanguage(cmd.args);
+        return;
       case '/clear':
         agent = createCurrentAgent();
-        output.write(ANSI.green('已开启新会话（历史已清空）。\n'));
+        output.write(ANSI.green(`${t('clear.done')}\n`));
         return;
       case '/resume':
         await cmdResume(cmd.args);
@@ -311,20 +318,63 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         return;
       case '/setup':
       case '/manage':
-        output.write(ANSI.yellow(`${cmd.name} 需要 TUI 交互界面（进度线向导/选择列表）。请在交互式终端中运行 liwen（无管道）后使用；非交互场景可手动编辑 ~/.liwencode/config.json 的 models 字段。\n`));
+        output.write(ANSI.yellow(`${t('config.tuiOnly', { cmd: cmd.name })}\n`));
         return;
       case '/agents':
       case '/mcp':
       case '/goal':
       case '/rewind': {
-        const doc = { '/agents': '三角色编排（hyaki/sota/common）', '/mcp': 'MCP 服务器管理', '/goal': '目标与确定性验收', '/rewind': '检查点回滚' }[cmd.name];
-        output.write(ANSI.yellow(`${cmd.name} 属于后续里程碑（M2+），当前版本为占位。用 /help 查看可用命令。\n  计划功能：${doc}\n`));
+        const doc = {
+          '/agents': t('milestone.agents'),
+          '/mcp': t('milestone.mcp'),
+          '/goal': t('milestone.goal'),
+          '/rewind': t('milestone.rewind'),
+        }[cmd.name];
+        output.write(ANSI.yellow(`${t('milestone.placeholder', { cmd: cmd.name, doc })}\n`));
         return;
       }
       default:
-        output.write(ANSI.yellow(`未知命令 '${cmd.name}'。输入 /help 查看全部命令。\n`));
+        output.write(ANSI.yellow(`${t('config.unknownCommand', { cmd: cmd.name })}\n`));
         return;
     }
+  }
+
+  /** /language：切换 CLI 语言；写入配置后立即退出，下次启动生效 */
+  async function cmdLanguage(args: string[]): Promise<void> {
+    const raw = args[0]?.trim().toLowerCase();
+    let target: Lang | undefined;
+    if (raw !== undefined) {
+      if (!isLang(raw)) {
+        output.write(ANSI.yellow(`${t('language.invalid', { value: args[0] ?? '' })}\n`));
+        return;
+      }
+      target = raw;
+    } else if (isTTY) {
+      output.write(`${t('language.current', { lang: languageName(getLanguage()) })}\n`);
+      output.write(`${t('language.option1')}\n${t('language.option2')}\n`);
+      const pick = (await rl.question(t('language.choose'))).trim().toLowerCase();
+      target = pick === '2' || pick === 'zh' ? 'zh' : pick === '1' || pick === 'en' ? 'en' : undefined;
+      if (target === undefined) {
+        output.write(ANSI.yellow(`${t('language.invalid', { value: pick })}\n`));
+        return;
+      }
+    } else {
+      output.write(`${t('language.current', { lang: languageName(getLanguage()) })}\n${t('language.panelHint')}\n`);
+      return;
+    }
+    if (target === getLanguage()) {
+      output.write(`${t('language.already', { lang: languageName(target) })}\n`);
+      return;
+    }
+    output.write(ANSI.yellow(`${t('language.warning')}\n`));
+    const confirm = (await rl.question(t('language.confirm', { lang: languageName(target) }))).trim().toLowerCase();
+    if (confirm !== 'y' && confirm !== 'yes') {
+      output.write(`${t('language.cancelled')}\n`);
+      return;
+    }
+    saveLanguage(target);
+    output.write(ANSI.green(`${t('language.saved', { lang: languageName(target) })}\n`));
+    throw new ExitRepl();
   }
 
   async function cmdModel(args: string[]): Promise<void> {
@@ -334,11 +384,17 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       const key = entry !== undefined && entry.apiKeyEnv !== undefined ? keyStatusOf(entry) : undefined;
       output.write(
         [
-          `当前模型: ${ANSI.bold(`${spec.provider}:${spec.model}`)}`,
-          entry !== undefined ? `  端点: ${entry.baseUrl === '' ? '(离线)' : entry.baseUrl}` : '',
-          key !== undefined ? `  密钥: ${key.set ? `${entry?.apiKeyEnv} 已设置（${key.source === 'env-file' ? '~/.liwencode/env' : '进程环境变量'}）` : `${entry?.apiKeyEnv} 未设置`}` : '  密钥: (无需)',
+          t('model.current', { model: ANSI.bold(`${spec.provider}:${spec.model}`) }),
+          entry !== undefined ? t('model.endpoint', { url: entry.baseUrl === '' ? t('common.offline') : entry.baseUrl }) : '',
+          key !== undefined
+            ? t('model.keyLine', {
+                status: key.set
+                  ? t('model.keySetSource', { env: entry?.apiKeyEnv ?? '', source: key.source === 'env-file' ? '~/.liwencode/env' : 'process env' })
+                  : t('model.keyUnset', { env: entry?.apiKeyEnv ?? '' }),
+              })
+            : t('model.keyNotNeeded'),
           '',
-          '用法: /model list | /model use <provider:model> | /model config [provider]',
+          t('model.usageShort'),
         ].filter((l) => l !== '').join('\n') + '\n',
       );
       return;
@@ -346,25 +402,25 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (sub === 'list') {
       const rows = PROVIDER_CATALOG.map((p) => {
         const key = p.apiKeyEnv !== undefined ? keyStatusOf(p) : { set: true, source: 'none' as const };
-        return `  ${(p.id + ':' + p.models.join('|')).padEnd(44)} ${p.label}  密钥: ${key.set ? ANSI.green('✔') : ANSI.yellow('✘')}`;
+        return `  ${(p.id + ':' + p.models.join('|')).padEnd(44)} ${providerLabel(p)}  ${t('common.keySet', { mark: key.set ? ANSI.green(t('common.yesMark')) : ANSI.yellow(t('common.noMark')) })}`;
       });
-      output.write(`Provider 目录：\n${rows.join('\n')}\n  切换: /model use deepseek:deepseek-chat\n`);
+      output.write(`${t('model.catalog')}\n${rows.join('\n')}\n${t('model.switchHint')}\n`);
       return;
     }
     if (sub === 'use') {
       const target = args[1];
       if (target === undefined || !target.includes(':')) {
-        output.write(ANSI.yellow('用法: /model use <provider:model>，例如 /model use deepseek:deepseek-chat\n'));
+        output.write(ANSI.yellow(`${t('model.useUsage')}\n`));
         return;
       }
       const [providerId, name] = target.split(':');
       const entry = catalogEntry(providerId ?? '');
       if (entry === undefined) {
-        output.write(ANSI.red(`未知 provider '${providerId}'。/model list 查看目录。\n`));
+        output.write(ANSI.red(`${t('model.unknownProvider', { provider: providerId ?? '' })}\n`));
         return;
       }
       if (entry.needsKey && !keyStatusOf(entry).set) {
-        output.write(ANSI.yellow(`${providerId} 需要密钥（${entry.apiKeyEnv}）。先运行 /model config ${providerId}\n`));
+        output.write(ANSI.yellow(`${t('model.needKey', { provider: providerId ?? '', env: entry.apiKeyEnv ?? '' })}\n`));
         return;
       }
       const history = [...agent.history];
@@ -375,40 +431,40 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       agent.engine.setMode(previousMode);
       agent.history.push(...history);
       writeUserConfig({ ...readUserConfig(), model: { provider: spec.provider, name: spec.model } });
-      output.write(ANSI.green(`已切换到 ${spec.provider}:${spec.model}（已保存为默认，历史保留）。\n`));
+      output.write(ANSI.green(`${t('model.switched', { provider: spec.provider, model: spec.model })}\n`));
       return;
     }
     if (sub === 'config') {
       await cmdModelConfig(args[1]);
       return;
     }
-    output.write(ANSI.yellow('用法: /model [list|use|config|show]\n'));
+    output.write(ANSI.yellow(`${t('model.usage')}\n`));
   }
 
   async function cmdModelConfig(providerId?: string): Promise<void> {
     if (!isTTY) {
-      output.write(ANSI.yellow('/model config 需要交互式终端。可手动编辑 ~/.liwencode/config.json 与 ~/.liwencode/env。\n'));
+      output.write(ANSI.yellow(`${t('config.replOnly')}\n`));
       return;
     }
     let entry = providerId !== undefined ? catalogEntry(providerId) : undefined;
     if (providerId !== undefined && entry === undefined) {
-      output.write(ANSI.red(`未知 provider '${providerId}'。可选: ${PROVIDER_CATALOG.map((p) => p.id).join(', ')}\n`));
+      output.write(ANSI.red(`${t('config.unknownProviderList', { provider: providerId, list: PROVIDER_CATALOG.map((p) => p.id).join(', ') })}\n`));
       return;
     }
     if (entry === undefined) {
-      output.write('配置哪个 Provider?\n');
-      PROVIDER_CATALOG.forEach((p, i) => output.write(`  ${i + 1}. ${p.id.padEnd(18)} ${p.label}\n`));
-      const pick = (await rl.question('序号 [1]: ')).trim();
+      output.write(`${t('config.pickProvider')}\n`);
+      PROVIDER_CATALOG.forEach((p, i) => output.write(`  ${i + 1}. ${p.id.padEnd(18)} ${providerLabel(p)}\n`));
+      const pick = (await rl.question(t('config.indexPrompt'))).trim();
       entry = PROVIDER_CATALOG[Number(pick || '1') - 1] ?? PROVIDER_CATALOG[0]!;
     }
     if (entry === undefined) return;
     const models = entry.models;
-    output.write(`模型 (${models.join(' / ')}):\n`);
-    const modelAnswer = (await rl.question(`模型名 [${models[0]}]: `)).trim();
+    output.write(`${t('config.models', { models: models.join(' / ') })}\n`);
+    const modelAnswer = (await rl.question(t('config.modelPrompt', { default: models[0] ?? '' }))).trim();
     const model = modelAnswer !== '' ? modelAnswer : models[0]!;
     let baseUrl = entry.baseUrl;
     if (entry.baseUrl !== '') {
-      const urlAnswer = (await rl.question(`Base URL [${entry.baseUrl}]: `)).trim();
+      const urlAnswer = (await rl.question(t('config.baseUrlPrompt', { default: entry.baseUrl }))).trim();
       if (urlAnswer !== '') baseUrl = urlAnswer;
     }
     const config = readUserConfig();
@@ -417,13 +473,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     writeUserConfig(config);
 
     if (entry.apiKeyEnv !== undefined) {
-      const keyAnswer = (await rl.question(`API Key（存入 ~/.liwencode/env，权限 0600；直接回车=跳过，改为在 shell 中 export ${entry.apiKeyEnv}）: `)).trim();
+      const keyAnswer = (await rl.question(t('config.apiKeyPrompt'))).trim();
       if (keyAnswer !== '') {
         const existing = parseEnvFile(await readFileSafe(envFilePath()) ?? '');
         existing[entry.apiKeyEnv] = keyAnswer;
         writeEnvFile(existing);
         process.env[entry.apiKeyEnv] = keyAnswer;
-        output.write(ANSI.green(`密钥已保存到 ~/.liwencode/env（${maskKey(keyAnswer)}）。绝不进入会话文件与日志。\n`));
+        output.write(ANSI.green(`${t('config.keySaved', { masked: maskKey(keyAnswer) })}\n`));
       }
     }
     spec = { provider: entry.id, model };
@@ -432,21 +488,21 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     agent = createCurrentAgent();
     agent.engine.setMode(previousMode);
     agent.history.push(...history);
-    output.write(ANSI.green(`配置完成，已切换到 ${entry.id}:${model}。\n`));
+    output.write(ANSI.green(`${t('config.done', { provider: entry.id, model })}\n`));
   }
 
   function cmdPermissions(args: string[], invokedAs = '/permissions'): void {
     if (args.length === 0) {
       const rules = sessionRules.length > 0
         ? sessionRules.map((r) => `  ${r.effect.padEnd(5)} ${r.tool}${r.match?.command !== undefined ? `  cmd=${r.match.command}` : ''}${r.match?.path !== undefined ? `  path=${r.match.path}` : ''}`).join('\n')
-        : '  (无临时规则)';
+        : t('config.rulesNone');
       output.write(
         [
-          `权限模式: ${ANSI.bold(agent.engine.mode)}（当前档位: ${tierLabelOf(agent.engine.mode)}）`,
+          t('config.permissionSummary', { mode: ANSI.bold(agent.engine.mode), tier: tierLabelOf(agent.engine.mode) }),
           ...permissionTierPanel(agent.engine.mode),
-          '本会话临时规则:',
+          t('config.rulesTitle'),
           rules,
-          `调整: ${invokedAs} <档位> | ${invokedAs} mode <m> | ${invokedAs} allow|deny <tool>`,
+          t('config.adjust', { invoked: invokedAs }),
         ].join('\n') + '\n',
       );
       return;
@@ -454,19 +510,19 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (args[0] === 'mode') {
       const mode = args[1];
       if (mode !== 'strict' && mode !== 'default' && mode !== 'acceptEdits' && mode !== 'plan' && mode !== 'bypass') {
-        output.write(ANSI.yellow('模式必须为 strict | default | acceptEdits | plan | bypass\n'));
+        output.write(ANSI.yellow(`${t('config.invalidMode')}\n`));
         return;
       }
       agent.engine.setMode(mode);
       permissionMode = mode;
-      output.write(ANSI.green(`权限模式已切换为 ${mode}。\n`));
+      output.write(ANSI.green(`${t('config.modeSwitched', { mode })}\n`));
       return;
     }
     if ((args[0] === 'allow' || args[0] === 'deny') && args[1] !== undefined) {
       const rule: PermissionRule = { effect: args[0], tool: args[1], source: 'user' };
       sessionRules.push(rule);
       agent.engine.addRules([rule]);
-      output.write(ANSI.green(`已添加 ${args[0]} 规则: ${args[1]}（仅本次会话）。\n`));
+      output.write(ANSI.green(`${t('config.ruleAdded', { effect: args[0] ?? '', tool: args[1] ?? '' })}\n`));
       return;
     }
     // 直接切换档位：/permission strict | HuangAura | WenNova（大小写/连字符不敏感）
@@ -475,12 +531,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       agent.engine.setMode(tier.mode);
       permissionMode = tier.mode;
       output.write(
-        ANSI.green(`权限档位已切换为 ${tier.key}（${permissionModeShort(tier.mode)}）。`) +
-          ANSI.dim('仅本次会话；启动默认用 --HuangAura / --WenNova 或配置 permissionMode\n'),
+        ANSI.green(t('tier.switched', { key: tier.key, label: permissionModeShort(tier.mode) })) +
+          ANSI.dim(`${t('tier.sessionOnly')}\n`),
       );
       return;
     }
-    output.write(ANSI.yellow(`用法: ${invokedAs} [strict|HuangAura|WenNova] | ${invokedAs} mode <m> | ${invokedAs} allow|deny <tool>\n`));
+    output.write(ANSI.yellow(`${t('tier.usage', { invoked: invokedAs })}\n`));
   }
 
   function cmdStatus(): void {
@@ -489,12 +545,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const turns = agent.history.filter((m) => m.role === 'assistant').length;
     output.write(
       [
-        `会话:   ${agent.sessionId}`,
-        `模型:   ${spec.provider}:${spec.model}`,
-        `模式:   ${agent.engine.mode}`,
-        `轮次:   ${turns}（历史消息 ${agent.history.length} 条）`,
-        `上下文: ~${contextTokens} / ${windowSize} tokens（${((contextTokens / windowSize) * 100).toFixed(1)}%）`,
-        `请求:   ${usageTotals.requests} 次，${usageTotals.inputTokens} 入 / ${usageTotals.outputTokens} 出 tokens`,
+        t('repl.status.session', { id: agent.sessionId }),
+        t('repl.status.model', { model: `${spec.provider}:${spec.model}` }),
+        t('repl.status.mode', { mode: agent.engine.mode }),
+        t('repl.status.turns', { turns, messages: agent.history.length }),
+        t('repl.status.context', { used: contextTokens, window: windowSize, pct: ((contextTokens / windowSize) * 100).toFixed(1) }),
+        t('repl.status.requests', { requests: usageTotals.requests, input: usageTotals.inputTokens, output: usageTotals.outputTokens }),
       ].join('\n') + '\n',
     );
   }
@@ -508,17 +564,23 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   }
 
   function cmdCost(): void {
-    const cost = usageTotals.costUsd > 0 ? `$${usageTotals.costUsd.toFixed(4)}` : '(当前 provider 未提供定价)';
+    const cost = usageTotals.costUsd > 0 ? `$${usageTotals.costUsd.toFixed(4)}` : t('repl.costUnpriced');
     output.write(
-      `累计用量: ${usageTotals.requests} 次请求 | 输入 ${usageTotals.inputTokens} tokens | 输出 ${usageTotals.outputTokens} tokens | 费用 ${cost}\n`,
+      `${t('repl.cost', { requests: usageTotals.requests, input: usageTotals.inputTokens, output: usageTotals.outputTokens, cost })}\n`,
     );
   }
 
   function cmdTools(): void {
     const rows = agent.registry.list().map(
-      (t) => `  ${t.name.padEnd(8)} ${t.risk.padEnd(7)} ${t.readOnly ? '只读' : '可写'}${t.concurrencySafe ? ' · 并发安全' : ''}`,
+      (tool) =>
+        t('repl.toolsRow', {
+          name: tool.name.padEnd(8),
+          risk: tool.risk.padEnd(7),
+          access: tool.readOnly ? t('repl.readOnly') : t('repl.writable'),
+          safe: tool.concurrencySafe ? t('repl.concurrentSafe') : '',
+        }),
     );
-    output.write(`已注册工具：\n${rows.join('\n')}\n`);
+    output.write(`${t('repl.tools')}\n${rows.join('\n')}\n`);
   }
 
   function cmdCompact(): void {
@@ -527,29 +589,29 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     agent.history.length = 0;
     agent.history.push(...compacted);
     const after = estimateMessagesTokens(agent.history, agent.registry.definitions());
-    output.write(ANSI.green(`已压缩: ~${before} → ~${after} tokens（清理了旧工具结果，保留最近 6 轮）。\n`));
+    output.write(ANSI.green(`${t('repl.compacted', { before, after })}\n`));
   }
 
   async function cmdResume(args: string[]): Promise<void> {
     const sessions = await sessionStore.list({ limit: 5 });
     if (args[0] === undefined) {
       if (sessions.length === 0) {
-        output.write('暂无历史会话。\n');
+        output.write(`${t('resume.none')}\n`);
         return;
       }
-      output.write('最近会话（/resume <id> 恢复）：\n');
+      output.write(`${t('resume.recent')}\n`);
       for (const s of sessions) {
-        output.write(`  ${s.sessionId.padEnd(42)} ${new Date(s.updatedAt).toLocaleString()}  ${s.entryCount} 条\n`);
+        output.write(`  ${s.sessionId.padEnd(42)} ${new Date(s.updatedAt).toLocaleString()}  ${t('resume.entries', { n: s.entryCount })}\n`);
       }
       return;
     }
     const target = sessions.find((s) => s.sessionId === args[0]);
     if (target === undefined) {
-      output.write(ANSI.yellow(`会话 '${args[0]}' 不存在（LW-SES-001）。/resume 查看列表。\n`));
+      output.write(ANSI.yellow(`${t('resume.notFound', { id: args[0] ?? '' })}\n`));
       return;
     }
     agent = createCurrentAgent(target.sessionId);
-    output.write(ANSI.green(`已恢复会话 ${target.sessionId}，下一条消息将接续该历史。\n`));
+    output.write(ANSI.green(`${t('resume.restored', { id: target.sessionId })}\n`));
   }
 
   // ── main loop ──────────────────────────────────────────────────────────
@@ -558,7 +620,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const now = Date.now();
     if (activeAbort !== undefined) {
       activeAbort.abort(new Error('SIGINT'));
-      output.write(ANSI.yellow('\n⏹ 已取消本轮（再按 Ctrl+C 退出）\n'));
+      output.write(ANSI.yellow(`\n${t('repl.cancelled')}\n`));
       return;
     }
     if (now - lastSigint < 2000) {
@@ -566,12 +628,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       process.exit(130);
     }
     lastSigint = now;
-    output.write(ANSI.yellow('\n（再按一次 Ctrl+C 退出）\n'));
+    output.write(ANSI.yellow(`\n${t('repl.exitHint')}\n`));
     safePrompt();
   });
 
   output.write(banner(tierLabelOf(tier.mode)));
-  if (!isTTY) output.write(ANSI.dim('（检测到管道输入：权限请求将按无人值守策略自动拒绝）\n'));
+  if (!isTTY) output.write(ANSI.dim(`${t('repl.pipeNotice')}\n`));
 
   safePrompt();
 
@@ -605,7 +667,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       await runTurn(trimmed);
     }
   } finally {
-    output.write(ANSI.dim('\n再见。\n'));
+    output.write(ANSI.dim(`\n${t('goodbye')}\n`));
     rl.close();
   }
   return 0;
@@ -615,20 +677,20 @@ class ExitRepl extends Error {}
 
 function banner(tierText: string): string {
   return [
-    ANSI.bold('LIWENCode v0.1 交互模式'),
-    ANSI.dim(`  权限档位: ${tierText}`),
-    ANSI.dim('  /help 查看命令 · @文件 引用上下文 · !命令 执行 shell · Ctrl+C 取消/退出'),
+    ANSI.bold(t('banner.title')),
+    ANSI.dim(t('banner.tier', { tier: tierText })),
+    ANSI.dim(t('banner.hint')),
     '',
   ].join('\n');
 }
 
 export function tierLabelOf(mode: 'strict' | 'default' | 'acceptEdits' | 'plan' | 'bypass'): string {
   switch (mode) {
-    case 'strict': return '严格档：一切操作均需确认（--HuangAura 升级读取免确认，--WenNova 全免确认）';
-    case 'default': return '部分权限（--HuangAura）：读取免确认，写/删/执行需确认';
-    case 'acceptEdits': return 'acceptEdits：工作区内写入免确认';
-    case 'plan': return 'plan：仅只读';
-    case 'bypass': return '完全权限（--WenNova）：文件增删改查读免确认（危险命令仍拒绝）';
+    case 'strict': return t('tier.long.strict');
+    case 'default': return t('tier.long.default');
+    case 'acceptEdits': return t('tier.long.acceptEdits');
+    case 'plan': return t('tier.long.plan');
+    case 'bypass': return t('tier.long.bypass');
   }
 }
 

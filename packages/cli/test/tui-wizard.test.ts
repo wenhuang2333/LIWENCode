@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { setLanguage } from '../src/i18n/index';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -6,7 +7,7 @@ import { LiwenError } from '@liwencode/core';
 import { buildProvider } from '../src/provider-select';
 import { saveProfile } from '../src/model-config';
 import {
-  WIZARD_STEPS,
+  wizardSteps,
   authOptionsFor,
   newWizard,
   renderWizard,
@@ -23,9 +24,10 @@ function isolatedHome(): string {
 }
 
 describe('tui/setup-wizard 状态机', () => {
+  beforeEach(() => setLanguage('en'));
   it('步骤顺序与需求一致（名称→地址→Key→协议→认证→档案名）', () => {
-    expect(WIZARD_STEPS.map((s) => s.id)).toEqual(['model', 'baseUrl', 'apiKey', 'protocol', 'authField', 'profileName']);
-    expect(WIZARD_STEPS.map((s) => s.kind)).toEqual(['text', 'text', 'secret', 'select', 'select', 'text']);
+    expect(wizardSteps().map((s) => s.id)).toEqual(['model', 'baseUrl', 'apiKey', 'protocol', 'authField', 'profileName']);
+    expect(wizardSteps().map((s) => s.kind)).toEqual(['text', 'text', 'secret', 'select', 'select', 'text']);
   });
 
   it('authOptionsFor：四种协议的认证字段集合', () => {
@@ -125,7 +127,7 @@ describe('tui/setup-wizard 渲染（Vite 式进度线）', () => {
     const w0 = plain[0]!.length;
     for (const l of plain) expect(l.length).toBe(w0);
     const joined = plain.join('\n');
-    for (const step of WIZARD_STEPS) expect(joined).toContain(step.label);
+    for (const step of wizardSteps()) expect(joined).toContain(step.label);
     expect(joined).toContain('◉'); // 当前步
     expect(joined).toContain('●'); // 完成步
     expect(joined).toContain('deepseek-chat'); // 已填答案

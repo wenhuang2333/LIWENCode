@@ -42,7 +42,9 @@ import type { CliArgs } from '../args.js';
 import { resolvePermissionTier } from '../args.js';
 import { buildProvider, type ProviderSpec } from '../provider-select.js';
 import { buildCliContext } from '../context.js';
-import { helpText, parsePermissionArg, parseSlash, permissionModeShort, permissionTierPanel } from '../slash.js';
+import { getLanguage, isLang, languageName, t, type Lang } from '../i18n/index.js';
+import { userErrorMessage, userEventErrorText } from '../error-text.js';
+import { commandDocs, helpText, parsePermissionArg, parseSlash, permissionModeShort, permissionTierPanel } from '../slash.js';
 import {
   catalogEntry,
   envFilePath,
@@ -50,8 +52,10 @@ import {
   liwenHome,
   maskKey,
   PROVIDER_CATALOG,
+  providerLabel,
   readUserConfig,
   resolveDefaultModel,
+  saveLanguage,
   writeEnvFile,
   writeUserConfig,
   parseEnvFile,
@@ -130,7 +134,6 @@ import {
   statusPanel,
   toolsPanel,
 } from '../views.js';
-import { COMMAND_DOCS } from '../slash.js';
 
 const ANSI = {
   dim: (s: string) => `\x1b[2m${s}\x1b[22m`,
@@ -331,7 +334,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
   /** 退出时的收尾文本：撤下 chrome 后打印告别语 */
   function goodbyeText(): string {
     const erase = chromeDrawn ? eraseChromeSeq() : '';
-    return `${erase}\r\n${ANSI.dim('再见。')}\r\n`;
+    return `${erase}\r\n${ANSI.dim(t('goodbye'))}\r\n`;
   }
 
   /** 在 chrome 上方打印文本（文本以换行结尾时正好贴住 chrome 顶部）。
@@ -368,29 +371,29 @@ export async function runTui(opts: TuiOptions): Promise<number> {
 
   function boxTitle(): string {
     const model = `${spec.provider}:${spec.model}`;
-    if (mode.kind === 'permission') return `允许执行? ${ANSI.yellow('[y]本次允许 / [s]本次会话均允许 / [n]拒绝 (默认 n)')}`;
+    if (mode.kind === 'permission') return t('box.permissionTitle');
     if (mode.kind === 'prompt') return ANSI.bold(promptQuestion);
     if (wizard !== null) return ANSI.bold(wizardQuestion(wizard));
     if (groupWizard !== null) return ANSI.bold(groupQuestion(groupWizard));
     const tier = permissionModeShort(agent.engine.mode);
-    const busyTag = busy ? ANSI.magenta(` · 处理中…${busySince !== null ? ` ${Math.floor((Date.now() - busySince) / 1000)}s` : ''}`) : '';
-    const queued = queuedInputs.length > 0 ? ANSI.dim(` · 已排队 ${queuedInputs.length} 条`) : '';
+    const busyTag = busy ? ANSI.magenta(t('box.busy', { secs: busySince !== null ? Math.floor((Date.now() - busySince) / 1000) : 0 })) : '';
+    const queued = queuedInputs.length > 0 ? ANSI.dim(t('box.queued', { n: queuedInputs.length })) : '';
     return `${ANSI.cyan(`liwen (${model})`)}${busyTag}${queued} ${ANSI.dim(`· ${tier}`)}`;
   }
 
-  /** 联想弹层可视行数上限：终端高度扣除输入框(3)/状态(1)/弹层边框等(5)/顶部余量(1) */
+  /** 联想弹层可视行数上限：弹层在输入框下方，需给输入框(3)/状态(1)/边框余量留位 */
   function paletteViewMax(total: number): number {
     const rows = output.rows ?? 24;
-    return Math.max(4, Math.min(total, rows - 10));
+    return Math.max(4, Math.min(total, rows - 8));
   }
 
-  /** 指令联想弹层（输入框上方）：全量候选 + 每行中文简介 + 视窗滚动 */
+  /** 指令联想弹层（输入框下方）：全量候选 + 每行简介 + 视窗滚动 */
   function renderPalette(cols: number): string[] {
     const w = Math.min(cols, 72);
     const total = paletteHints.length;
     const { start, end } = paletteWindow(total, paletteIdx, paletteViewMax(total));
     const windowed = end - start < total;
-    const title = windowed ? ` commands ${start + 1}-${end}/${total} ` : ` commands (${total}) `;
+    const title = ` ${windowed ? t('palette.titleWindow', { start: start + 1, end, total }) : t('palette.titleAll', { total })} `;
     const lines: string[] = [];
     const fill = w - 2 - title.length;
     lines.push(`╭${'─'.repeat(Math.floor(fill / 2))}${title}${'─'.repeat(fill - Math.floor(fill / 2))}╮`);
@@ -408,11 +411,11 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     }
     // 选中项用法 + 键位提示
     const sel = paletteHints[paletteIdx]!;
-    const usage = `用法: ${sel.name}${sel.args !== '' ? ` ${sel.args}` : ''}`;
+    const usage = t('palette.usage', { name: sel.name, args: sel.args !== '' ? ` ${sel.args}` : '' });
     const [usageShown] = truncateToWidth(usage, w - 6);
     lines.push(`├${'─'.repeat(w - 2)}┤`);
     lines.push(`│ ${ANSI.dim(usageShown)}${' '.repeat(Math.max(0, w - 4 - displayWidth(usageShown)))} │`);
-    const keys = '↑↓ 选择 · Tab/Enter 补全 · Esc 关闭';
+    const keys = t('palette.keys');
     lines.push(`│ ${ANSI.dim(keys)}${' '.repeat(Math.max(0, w - 4 - displayWidth(keys)))} │`);
     lines.push(`╰${'─'.repeat(w - 2)}╯`);
     return lines;
@@ -476,7 +479,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
         cols,
         panelH,
         Date.now(),
-        { version: 'v0.1.0', model: `${spec.provider}:${spec.model}`, tier: tierEnShort(agent.engine.mode) },
+        { version: 'v0.1.0', model: `${spec.provider}:${spec.model}`, tier: permissionModeShort(agent.engine.mode) },
         welcomeFrozen,
       );
       lines.push(...panel);
@@ -490,11 +493,6 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     // /set-agents agent 群向导（三角色进度线）
     if (groupWizard !== null) {
       lines.push(...renderGroupWizard(groupWizard, Math.min(cols, 68)));
-    }
-
-    // 指令联想弹层
-    if (paletteHints.length > 0) {
-      lines.push(...renderPalette(cols));
     }
 
     const aboveBox = lines.length;
@@ -517,6 +515,11 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     lines.push(`│ ${ANSI.cyan('❯ ')}${visible}${' '.repeat(Math.max(1, pad))}│`);
 
     lines.push(`└${'─'.repeat(cols - 2)}┘`);
+
+    // 指令联想弹层：位于输入框下方、状态行上方（弹层始终在光标之下）
+    if (paletteHints.length > 0) {
+      lines.push(...renderPalette(cols));
+    }
 
     const snap = tracker.snapshot(Date.now());
     const status = formatStatusLine(snap, cols - 2);
@@ -543,9 +546,12 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     if (chromeDrawn && lastFrame !== null) {
       const up = lastAboveBox + 1; // 输入行 → 旧帧首
       if (up > 0) seq.push(`\x1b[${up}A`);
+      const growth = lines.length - lastFrame.length;
+      // 底部锚定：帧变高时先上移 growth 行（弹层在输入框下方，否则会顶出屏幕底部）
+      if (growth > 0) seq.push(`\x1b[${growth}A`);
       seq.push('\r', CLEAR_BELOW);
       const d = lastFrame.length - lines.length;
-      if (d > 0) seq.push(`\x1b[${d}B`); // 底部锚定：收缩时新帧下移
+      if (d > 0) seq.push(`\x1b[${d}B`); // 收缩时新帧下移，输入框位置不跳
     } else {
       seq.push('\r');
     }
@@ -592,7 +598,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
   // ── 权限审批（复用编辑器） ───────────────────────────────────────────
 
   function tuiPermissionHandler(req: PermissionRequest): Promise<PermissionDecision> {
-    printAbove(`\n${ANSI.yellow('⚠ 权限请求')} ${previewOfRequest(req)}\n`);
+    printAbove(`\n${ANSI.yellow(t('permission.request'))} ${previewOfRequest(req)}\n`);
     return new Promise<PermissionDecision>((resolve) => {
       mode = {
         kind: 'permission',
@@ -600,7 +606,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
           const a = answer.trim().toLowerCase();
           if (a === 'y') resolve({ decision: 'allow' });
           else if (a === 's') resolve({ decision: 'allow', remember: 'session' });
-          else resolve({ decision: 'deny', message: '用户拒绝了该操作。' });
+          else resolve({ decision: 'deny', message: t('permission.deniedByUser') });
         },
       };
       editor.clear();
@@ -610,10 +616,10 @@ export async function runTui(opts: TuiOptions): Promise<number> {
 
   function previewOfRequest(req: PermissionRequest): string {
     const s = req.subject;
-    if (s.command !== undefined) return `${req.tool} 执行 ${ANSI.bold(s.command)}（${req.risk}）`;
-    if (s.path !== undefined) return `${req.tool} 写入 ${ANSI.bold(s.path)}（${req.risk}）`;
-    if (s.url !== undefined) return `${req.tool} 访问 ${ANSI.bold(s.url)}（${req.risk}）`;
-    return `${req.tool}（${req.risk}）`;
+    if (s.command !== undefined) return t('permission.subject.command', { tool: req.tool, command: ANSI.bold(s.command), risk: req.risk });
+    if (s.path !== undefined) return t('permission.subject.path', { tool: req.tool, path: ANSI.bold(s.path), risk: req.risk });
+    if (s.url !== undefined) return t('permission.subject.url', { tool: req.tool, url: ANSI.bold(s.url), risk: req.risk });
+    return t('permission.subject.generic', { tool: req.tool, risk: req.risk });
   }
 
   /** 通用问答（/model config 等复用）：问题显示在框标题，编辑器提交即回答 */
@@ -686,7 +692,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
           wizard = null;
           editor.clear();
           editor.setNavCapture(false);
-          printAbove(`${ANSI.yellow('已取消 /setup 向导。')}\n`);
+          printAbove(`${ANSI.yellow(t('setup.cancelled'))}\n`);
           redraw();
           continue;
         }
@@ -694,7 +700,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
           groupWizard = null;
           editor.clear();
           editor.setNavCapture(false);
-          printAbove(`${ANSI.yellow('已取消 /set-agents 向导。')}\n`);
+          printAbove(`${ANSI.yellow(t('groups.cancelled'))}\n`);
           redraw();
           continue;
         }
@@ -724,13 +730,13 @@ export async function runTui(opts: TuiOptions): Promise<number> {
           wizard = null;
           editor.clear();
           editor.setNavCapture(false);
-          printAbove(`${ANSI.yellow('已取消 /setup 向导。')}\n`);
+          printAbove(`${ANSI.yellow(t('setup.cancelled'))}\n`);
           redraw();
         } else if (groupWizard !== null) {
           groupWizard = null;
           editor.clear();
           editor.setNavCapture(false);
-          printAbove(`${ANSI.yellow('已取消 /set-agents 向导。')}\n`);
+          printAbove(`${ANSI.yellow(t('groups.cancelled'))}\n`);
           redraw();
         } else if (paletteHints.length > 0) {
           paletteHints = [];
@@ -814,24 +820,30 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     const keyStatus = profileKeyStatus(profile);
     printAbove(
       [
-        `${ANSI.green(`✔ 模型档案 @${name} 已保存`)}`,
-        `  模型:   ${profile.model}`,
-        `  地址:   ${profile.baseUrl}`,
-        `  协议:   ${PROTOCOL_LABELS[profile.protocol]}`,
-        `  认证:   ${AUTH_FIELD_LABELS[profile.authField]}（密钥字段 ${profile.apiKeyEnv}，${keyStatus.set ? `已存入 ~/.liwencode/env（${keyStatus.source === 'env-file' ? 'env 文件' : '进程环境'}）` : '未设置——可稍后用 /manage 编辑补填'}）`,
-        profile.protocol === 'openai-responses' || profile.protocol === 'gemini'
-          ? `${ANSI.yellow('  注意: 该协议适配器规划于 M2，当前无法实际调用；配置已保存。')}`
-          : '',
+        ANSI.green(t('setup.saved', { name })),
+        t('setup.field.model', { value: profile.model }),
+        t('setup.field.baseUrl', { value: profile.baseUrl }),
+        t('setup.field.protocol', { value: PROTOCOL_LABELS[profile.protocol] }),
+        t('setup.field.auth', { value: AUTH_FIELD_LABELS[profile.authField] }),
+        t('setup.field.key', {
+          env: profile.apiKeyEnv,
+          status: keyStatus.set
+            ? keyStatus.source === 'env-file'
+              ? t('setup.keyInEnvFile')
+              : t('setup.keyInProcessEnv')
+            : t('setup.keyMissing'),
+        }),
+        profile.protocol === 'openai-responses' || profile.protocol === 'gemini' ? ANSI.yellow(t('setup.protocolNotice')) : '',
       ]
         .filter((l) => l !== '')
         .join('\n') + '\n',
     );
     const ask = makePrompt();
-    const activate = (await ask(`设为当前模型? [Y/n]: `)).trim().toLowerCase();
+    const activate = (await ask(t('setup.activatePrompt'))).trim().toLowerCase();
     if (activate === '' || activate === 'y') {
       switchModel(`@${name}`, profile.model);
     } else {
-      printAbove(`${ANSI.dim(`保持当前模型；之后可用 /model use @${name} 启用。`)}\n`);
+      printAbove(`${ANSI.dim(t('setup.kept', { name }))}\n`);
     }
     redraw();
   }
@@ -893,20 +905,20 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     saveAgentGroup(name, group);
     printAbove(
       [
-        `${ANSI.green(`✔ agent 群 '${name}' 已保存`)}`,
+        ANSI.green(t('groups.saved', { name })),
         '',
         ...groupSummary(name, a),
         '',
-        ANSI.dim('  同一模型可担任多个角色（低成本场景三角色同一模型即可）；'),
-        ANSI.dim('  /agents 三角色编排模式规划于 M3，当前 common 角色作为执行模型直接可用。'),
+        ANSI.dim(t('groups.note1')),
+        ANSI.dim(t('groups.note2')),
       ].join('\n') + '\n',
     );
     const ask = makePrompt();
-    const activate = (await ask('设为当前 agent 群? [Y/n]: ')).trim().toLowerCase();
+    const activate = (await ask(t('groups.activatePrompt'))).trim().toLowerCase();
     if (activate === '' || activate === 'y') {
       activateGroup(name);
     } else {
-      printAbove(`${ANSI.dim(`保持当前模型；之后可用 /model use @${name} 启用该群。`)}\n`);
+      printAbove(`${ANSI.dim(t('groups.kept', { name }))}\n`);
     }
     redraw();
   }
@@ -1008,7 +1020,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       redraw();
       return;
     }
-    printAbove(ANSI.dim('（再按一次 Ctrl+C 退出）') + '\n');
+    printAbove(ANSI.dim(t('ctrlC.exitHint')) + '\n');
   }
 
   async function dispatch(raw: string): Promise<void> {
@@ -1100,7 +1112,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
         if (r.done) {
           const summary = r.value;
           if (summary.endReason !== 'completed' && summary.endReason !== 'aborted') {
-            printAbove(`${ANSI.yellow(`本轮结束: ${summary.endReason}`)}\n`);
+            printAbove(`${ANSI.yellow(t('error.turnEnded', { reason: summary.endReason }))}\n`);
           }
           break;
         }
@@ -1108,8 +1120,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       }
     } catch (e) {
       printAbove('');
-      if (LiwenError.is(e)) printAbove(`${ANSI.red(`错误 ${e.code}: ${e.message}`)}\n`);
-      else printAbove(`${ANSI.red(`错误: ${e instanceof Error ? e.message : String(e)}`)}\n`);
+      printAbove(`${ANSI.red(t('error.withCode', { code: LiwenError.is(e) ? e.code : '-', message: userErrorMessage(e) }))}\n`);
     } finally {
       closeStreamLines();
       busy = false;
@@ -1149,10 +1160,11 @@ export async function runTui(opts: TuiOptions): Promise<number> {
           break;
         }
         case 'budget.warning':
-          printAbove(`${ANSI.yellow(`  ⚠ 预算已达 ${Math.round(ev.ratio * 100)}%`)}\r\n`);
+          printAbove(`${ANSI.yellow(`  ${t('error.budget', { pct: Math.round(ev.ratio * 100) })}`)}\r\n`);
           break;
         case 'error':
-          printAbove(ev.fatal ? `${ANSI.red(`  ✖ ${ev.error.code} ${ev.error.message}`)}\r\n` : `${ANSI.yellow(`  ⚠ ${ev.error.code} ${ev.error.message}`)}\r\n`);
+          const msg = `${ev.error.code} ${userEventErrorText(ev.error.code, ev.error.message)}`;
+          printAbove(ev.fatal ? `${ANSI.red(`  ✖ ${msg}`)}\r\n` : `${ANSI.yellow(`  ⚠ ${msg}`)}\r\n`);
           break;
         default:
           break;
@@ -1186,8 +1198,8 @@ export async function runTui(opts: TuiOptions): Promise<number> {
         } else {
           printPanelLines(
             helpPanel(
-              COMMAND_DOCS.filter((c) => c.since === 'v0.1').map((c) => ({ usage: c.usage, summary: c.summary })),
-              COMMAND_DOCS.filter((c) => c.since !== 'v0.1').map((c) => ({ name: c.name, summary: c.summary, since: c.since })),
+              commandDocs().filter((c) => c.since === 'v0.1').map((c) => ({ usage: c.usage, summary: c.summary })),
+              commandDocs().filter((c) => c.since !== 'v0.1').map((c) => ({ name: c.name, summary: c.summary, since: c.since })),
             ),
           );
         }
@@ -1216,13 +1228,16 @@ export async function runTui(opts: TuiOptions): Promise<number> {
         return;
       case '/clear':
         agent = createCurrentAgent();
-        printAbove(`${ANSI.green('已开启新会话（历史已清空）。')}\n`);
+        printAbove(`${ANSI.green(t('clear.done'))}\n`);
         return;
       case '/resume':
         await cmdResume(cmd.args);
         return;
       case '/doctor':
         printPanelLines(doctorPanel(runDoctor(cwd)));
+        return;
+      case '/language':
+        await guided(() => cmdLanguage(cmd.args));
         return;
       case '/setup':
         startWizard();
@@ -1236,7 +1251,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       case '/setting': {
         const active = readUserConfig().activeAgentGroup;
         if (active === undefined) {
-          printAbove(`${ANSI.yellow('当前没有激活的 agent 群。先用 /set-agents 新建或选择一个群。')}\n`);
+          printAbove(`${ANSI.yellow(t('groups.none'))}\n`);
           return;
         }
         startGroupWizard(active);
@@ -1247,26 +1262,26 @@ export async function runTui(opts: TuiOptions): Promise<number> {
         const names = Object.keys(groups);
         const active = readUserConfig().activeAgentGroup;
         printPanelLines(
-          panel('agents (work mode · M3)', [
-            section('three-role orchestration'),
-            C.dim('hyaki   summarize large inputs   low-cost model'),
-            C.dim('sota    think, plan, review      high-capability model'),
-            C.dim('common  implement & execute      balanced model'),
+          panel(t('agents.panelTitle'), [
+            section(t('agents.sectionRoles')),
+            C.dim(t('agents.roleLineHyaki')),
+            C.dim(t('agents.roleLineSota')),
+            C.dim(t('agents.roleLineCommon')),
             '',
-            section(`configured groups (${names.length})`),
+            section(t('agents.sectionGroups', { n: names.length })),
             ...(names.length > 0
               ? table(
-                  ['group', 'hyaki', 'sota', 'common'],
+                  [t('tbl.group'), 'hyaki', 'sota', 'common'],
                   names.map((n) => {
                     const g = groups[n]!;
                     return [`${n === active ? C.green('●') : C.dim('○')} @${n}`, g.hyaki, g.sota, g.common];
                   }),
                 )
-              : [C.dim('(none — run /set-agents to build one)')]),
+              : [C.dim(t('val.noneGroups'))]),
             '',
-            C.yellow('the /agents work mode itself ships in M3.'),
-            C.dim('until then, activating a group drives the session with its common model.'),
-            C.dim('configure: /set-agents · quick-edit active: /setting · switch: /model use @group'),
+            C.yellow(t('agents.workModeM3')),
+            C.dim(t('agents.untilThen')),
+            C.dim(t('agents.configureHint')),
           ]),
         );
         return;
@@ -1274,14 +1289,57 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       case '/mcp':
       case '/goal':
       case '/rewind': {
-        const doc = { '/mcp': 'MCP 服务器管理', '/goal': '目标与确定性验收', '/rewind': '检查点回滚' }[cmd.name];
-        printAbove(`${ANSI.yellow(`${cmd.name} 属于后续里程碑（M2+），当前版本为占位。用 /help 查看全部命令。`)}\n${ANSI.dim(`  计划功能：${doc}`)}\n`);
+        const doc = { '/mcp': t('milestone.mcp'), '/goal': t('milestone.goal'), '/rewind': t('milestone.rewind') }[cmd.name];
+        printAbove(`${ANSI.yellow(t('milestone.placeholder', { cmd: cmd.name, doc }))}\n`);
         return;
       }
       default:
-        printAbove(`${ANSI.yellow(`未知命令 '${cmd.name}'。输入 /help 查看全部命令。`)}\n`);
+        printAbove(`${ANSI.yellow(t('config.unknownCommand', { cmd: cmd.name }))}\n`);
         return;
     }
+  }
+
+  /** /language：切换 CLI 语言；写入配置后立即退出，下次启动生效 */
+  async function cmdLanguage(args: string[]): Promise<void> {
+    const raw = args[0]?.trim().toLowerCase();
+    let target: Lang | undefined;
+    if (raw !== undefined) {
+      if (!isLang(raw)) {
+        printAbove(`${ANSI.yellow(t('language.invalid', { value: args[0] ?? '' }))}\n`);
+        return;
+      }
+      target = raw;
+    } else {
+      printAbove(
+        [
+          t('language.current', { lang: languageName(getLanguage()) }),
+          t('language.option1'),
+          t('language.option2'),
+          '',
+        ].join('\n') + '\n',
+      );
+      const ask = makePrompt();
+      const pick = (await ask(t('language.choose'))).trim().toLowerCase();
+      target = pick === '2' || pick === 'zh' ? 'zh' : pick === '1' || pick === 'en' ? 'en' : undefined;
+      if (target === undefined) {
+        printAbove(`${ANSI.yellow(t('language.invalid', { value: pick }))}\n`);
+        return;
+      }
+    }
+    if (target === getLanguage()) {
+      printAbove(`${t('language.already', { lang: languageName(target) })}\n`);
+      return;
+    }
+    printAbove(`${ANSI.yellow(t('language.warning'))}\n`);
+    const ask2 = makePrompt();
+    const confirm = (await ask2(t('language.confirm', { lang: languageName(target) }))).trim().toLowerCase();
+    if (confirm !== 'y' && confirm !== 'yes') {
+      printAbove(`${t('language.cancelled')}\n`);
+      return;
+    }
+    saveLanguage(target);
+    printAbove(`${ANSI.green(t('language.saved', { lang: languageName(target) }))}\n`);
+    throw new ExitTui();
   }
 
   async function cmdModel(args: string[]): Promise<void> {
@@ -1293,7 +1351,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     if (sub === 'use') {
       const target = args[1];
       if (target === undefined) {
-        printAbove(`${ANSI.yellow('用法: /model use <provider:model | @profile | @group>，例如 /model use deepseek:deepseek-chat 或 /model use @my-team')}\n`);
+        printAbove(`${ANSI.yellow(t('model.useUsage'))}\n`);
         return;
       }
       if (target.startsWith('@')) {
@@ -1307,21 +1365,21 @@ export async function runTui(opts: TuiOptions): Promise<number> {
           switchModel(`@${name}`, profile.model);
           return;
         }
-        printAbove(`${ANSI.red(`'${target}' 不是已保存的模型档案或 agent 群。/model 查看清单。`)}\n`);
+        printAbove(`${ANSI.red(t('model.unknownTarget', { target }))}\n`);
         return;
       }
       if (!target.includes(':')) {
-        printAbove(`${ANSI.yellow('用法: /model use <provider:model | @profile | @group>')}\n`);
+        printAbove(`${ANSI.yellow(t('model.useUsageShort'))}\n`);
         return;
       }
       const [providerId, name] = target.split(':');
       const entry = catalogEntry(providerId ?? '');
       if (entry === undefined) {
-        printAbove(`${ANSI.red(`未知 provider '${providerId}'。/model 查看目录。`)}\n`);
+        printAbove(`${ANSI.red(t('model.unknownProvider', { provider: providerId ?? '' }))}\n`);
         return;
       }
       if (entry.needsKey && !keyStatusOf(entry).set) {
-        printAbove(`${ANSI.yellow(`${providerId} 需要密钥（${entry.apiKeyEnv}）。先运行 /setup 或 /model config ${providerId}`)}\n`);
+        printAbove(`${ANSI.yellow(t('model.needKey', { provider: providerId ?? '', env: entry.apiKeyEnv ?? '' }))}\n`);
         return;
       }
       switchModel(providerId ?? 'mock', name ?? 'default');
@@ -1331,7 +1389,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       await cmdModelConfig(args[1]);
       return;
     }
-    printAbove(`${ANSI.yellow('用法: /model [list | use <provider:model|@profile|@group> | config]')}\n`);
+    printAbove(`${ANSI.yellow(t('model.usage'))}\n`);
   }
 
   function switchModel(providerId: string, name: string): void {
@@ -1344,7 +1402,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     agent.history.push(...history);
     tracker.setModel({ model: `${spec.provider}:${spec.model}`, contextWindow: safeContextWindow(spec) });
     writeUserConfig({ ...readUserConfig(), model: { provider: spec.provider, name: spec.model } });
-    printAbove(`${ANSI.green(`已切换到 ${spec.provider}:${spec.model}（已保存为默认，历史保留）。`)}\n`);
+    printAbove(`${ANSI.green(t('model.switched', { provider: spec.provider, model: spec.model }))}\n`);
   }
 
   /** /model 面板：当前模型 + 内置 Provider + 自定义档案 + agent 群 */
@@ -1356,7 +1414,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
         activeGroup: config.activeAgentGroup,
         catalog: PROVIDER_CATALOG.map((p) => ({
           id: p.id,
-          label: p.label,
+          label: providerLabel(p),
           models: p.models,
           keySet: p.apiKeyEnv === undefined ? true : keyStatusOf(p).set,
         })),
@@ -1379,15 +1437,15 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       return;
     }
     if (entry === undefined) {
-      printAbove('配置哪个 Provider?\n');
-      PROVIDER_CATALOG.forEach((p, i) => printAbove(`  ${i + 1}. ${p.id.padEnd(18)} ${p.label}\n`));
-      const pick = (await ask('序号 [1]: ')).trim();
+      printAbove(`${t('config.providerPick')}\n`);
+      PROVIDER_CATALOG.forEach((p, i) => printAbove(`  ${i + 1}. ${p.id.padEnd(18)} ${providerLabel(p)}\n`));
+      const pick = (await ask(t('config.indexPrompt'))).trim();
       entry = PROVIDER_CATALOG[Number(pick || '1') - 1] ?? PROVIDER_CATALOG[0]!;
     }
     if (entry === undefined) return;
     const models = entry.models;
-    printAbove(`模型 (${models.join(' / ')}):\n`);
-    const modelAnswer = (await ask(`模型名 [${models[0]}]: `)).trim();
+    printAbove(`${t('config.models', { models: models.join(' / ') })}\n`);
+    const modelAnswer = (await ask(t('config.modelPrompt', { default: models[0] ?? '' }))).trim();
     const model = modelAnswer !== '' ? modelAnswer : models[0]!;
     let baseUrl = entry.baseUrl;
     if (entry.baseUrl !== '') {
@@ -1400,7 +1458,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     writeUserConfig(config);
 
     if (entry.apiKeyEnv !== undefined) {
-      const keyAnswer = (await ask(`API Key（存入 ~/.liwencode/env，权限 0600；直接回车=跳过）: `)).trim();
+      const keyAnswer = (await ask(t('config.apiKeyPrompt'))).trim();
       if (keyAnswer !== '') {
         const existing = parseEnvFile((await readFileSafe(envFilePath())) ?? '');
         existing[entry.apiKeyEnv] = keyAnswer;
@@ -1418,12 +1476,12 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       if (args[0] === 'mode' && args[1] !== undefined) {
         const modeArg = args[1];
         if (modeArg !== 'strict' && modeArg !== 'default' && modeArg !== 'acceptEdits' && modeArg !== 'plan' && modeArg !== 'bypass') {
-          printAbove(`${ANSI.yellow('模式必须为 strict | default | acceptEdits | plan | bypass')}\n`);
+          printAbove(`${ANSI.yellow(t('config.invalidMode'))}\n`);
           return;
         }
         agent.engine.setMode(modeArg);
         permissionMode = modeArg;
-        printAbove(`${ANSI.green(`权限模式已切换为 ${modeArg}。`)}\n`);
+        printAbove(`${ANSI.green(t('config.modeSwitched', { mode: modeArg }))}\n`);
         return;
       }
       if ((args[0] === 'allow' || args[0] === 'deny') && args[1] !== undefined) {
@@ -1435,33 +1493,33 @@ export async function runTui(opts: TuiOptions): Promise<number> {
         agent.engine.setMode(tier.mode);
         permissionMode = tier.mode;
         printAbove(
-          `${ANSI.green(`权限档位已切换为 ${tier.key}（${permissionModeShort(tier.mode)}）。`)}${ANSI.dim('仅本次会话；启动默认用 --HuangAura / --WenNova 或配置 permissionMode')}\n`,
+          `${ANSI.green(t('tier.switched', { key: tier.key, label: permissionModeShort(tier.mode) }))}${ANSI.dim(t('tier.sessionOnly'))}\n`,
         );
         return;
       }
-      printAbove(`${ANSI.yellow(`用法: ${invokedAs} [strict|HuangAura|WenNova|acceptEdits|plan] | ${invokedAs} mode <m> | ${invokedAs} allow|deny <tool>`)}${ANSI.dim('（无参数进入问答引导）')}\n`);
+      printAbove(`${ANSI.yellow(t('tier.usageLong', { invoked: invokedAs }))}${ANSI.dim(t('config.guidedHint'))}\n`);
       return;
     }
 
     // ── 无参数：面板 + 逐项问答引导 ──
     printPanelLines(permissionsPanel(agent.engine.mode, permissionModeShort(agent.engine.mode), permRuleRows()));
     const ask = makePrompt();
-    const modeAns = (await ask('switch tier? strict / HuangAura / WenNova / acceptEdits / plan (empty = keep): ')).trim();
+    const modeAns = (await ask(t('perm.switchAsk'))).trim();
     if (modeAns !== '') {
       const parsed = parsePermissionArg(modeAns);
       if (parsed === null) {
-        printAbove(`${ANSI.yellow(`无法识别 '${modeAns}'，档位未变更。`)}\n`);
+        printAbove(`${ANSI.yellow(t('perm.unrecognized', { value: modeAns }))}\n`);
       } else {
         agent.engine.setMode(parsed.mode);
         permissionMode = parsed.mode;
-        printAbove(`${ANSI.green(`权限档位已切换为 ${parsed.key}（${permissionModeShort(parsed.mode)}）。`)}\n`);
+        printAbove(`${ANSI.green(t('tier.switched', { key: parsed.key, label: permissionModeShort(parsed.mode) }))}\n`);
       }
     }
-    const allowAns = (await ask('add an ALLOW rule (tool name or pattern, empty = skip): ')).trim();
+    const allowAns = (await ask(t('perm.allowAsk'))).trim();
     if (allowAns !== '') addSessionRule('allow', allowAns);
-    const denyAns = (await ask('add a DENY rule (tool name or pattern, empty = skip): ')).trim();
+    const denyAns = (await ask(t('perm.denyAsk'))).trim();
     if (denyAns !== '') addSessionRule('deny', denyAns);
-    printAbove(`${ANSI.dim('最终状态：')}\n`);
+    printAbove(`${ANSI.dim(t('config.finalState'))}\n`);
     printPanelLines(permissionsPanel(agent.engine.mode, permissionModeShort(agent.engine.mode), permRuleRows()));
   }
 
@@ -1537,7 +1595,7 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     agent.history.length = 0;
     agent.history.push(...compacted);
     const after = estimateMessagesTokens(agent.history, agent.registry.definitions());
-    printAbove(`${ANSI.green(`已压缩: ~${before} → ~${after} tokens（清理了旧工具结果，保留最近 6 轮）。`)}\n`);
+    printAbove(`${ANSI.green(t('repl.compacted', { before, after }))}\n`);
   }
 
   /** /manage：查看/编辑/删除已保存的自定义模型档案 */
@@ -1545,40 +1603,44 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     const profiles = listProfiles();
     const names = Object.keys(profiles);
     if (names.length === 0) {
-      printAbove(`${ANSI.dim('暂无自定义模型档案。运行 /setup 创建第一个。')}\n`);
+      printAbove(`${ANSI.dim(t('config.noProfiles'))}\n`);
       return;
     }
     const rows = names.map((n) => {
       const p = profiles[n]!;
       const key = profileKeyStatus(p);
-      return `  ${(('@' + n)).padEnd(16)} ${PROTOCOL_LABELS[p.protocol].padEnd(40)} ${p.model.padEnd(18)} 密钥: ${key.set ? ANSI.green('✔') : ANSI.yellow('✘')}`;
+      return `  ${(('@' + n)).padEnd(16)} ${PROTOCOL_LABELS[p.protocol].padEnd(40)} ${p.model.padEnd(18)} ${t('common.keySet', { mark: key.set ? ANSI.green(t('common.yesMark')) : ANSI.yellow(t('common.noMark')) })}`;
     });
-    printAbove([`已保存模型档案（${names.length} 个）：`, ...rows].join('\n') + '\n');
+    printAbove([t('config.profilesSaved', { n: names.length }), ...rows].join('\n') + '\n');
 
     const ask = makePrompt();
     let target = args[0];
     if (target === undefined) {
-      target = (await ask('manage which profile? (name, empty = cancel): ')).trim().replace(/^@/, '');
+      target = (await ask(t('manage.which'))).trim().replace(/^@/, '');
     }
     if (target === '') return;
     const profile = profiles[target];
     if (profile === undefined) {
-      printAbove(`${ANSI.yellow(`档案 '@${target}' 不存在。`)}\n`);
+      printAbove(`${ANSI.yellow(t('manage.notFound', { name: target }))}\n`);
       return;
     }
     printAbove(
       [
         `@${target}:`,
-        `  模型:   ${profile.model}`,
-        `  地址:   ${profile.baseUrl}`,
-        `  协议:   ${PROTOCOL_LABELS[profile.protocol]}`,
-        `  认证:   ${AUTH_FIELD_LABELS[profile.authField]}（${profile.apiKeyEnv}，${profileKeyStatus(profile).set ? '已设置' : '未设置'}）`,
-        `  更新:   ${new Date(profile.updatedAt).toLocaleString()}`,
+        t('setup.field.model', { value: profile.model }),
+        t('setup.field.baseUrl', { value: profile.baseUrl }),
+        t('setup.field.protocol', { value: PROTOCOL_LABELS[profile.protocol] }),
+        t('setup.field.auth', { value: AUTH_FIELD_LABELS[profile.authField] }),
+        t('setup.field.key', {
+          env: profile.apiKeyEnv,
+          status: profileKeyStatus(profile).set ? t('common.set') : t('common.notSet'),
+        }),
+        `  ${t('tbl.updated')}: ${new Date(profile.updatedAt).toLocaleString()}`,
       ].join('\n') + '\n',
     );
     const action = (await ask('[e]dit / [d]elete / (empty = cancel): ')).trim().toLowerCase();
     if (action === 'e' || action === 'edit') {
-      printAbove(`${ANSI.dim(`编辑 @${target}：文本步直接回车 = 沿用当前值；API Key 留空 = 不变更。`)}\n`);
+      printAbove(`${ANSI.dim(t('manage.editHint', { name: target }))}\n`);
       startWizard(
         { model: profile.model, baseUrl: profile.baseUrl, protocol: profile.protocol, authField: profile.authField },
         target,
@@ -1586,12 +1648,12 @@ export async function runTui(opts: TuiOptions): Promise<number> {
       return;
     }
     if (action === 'd' || action === 'delete') {
-      const confirm = (await ask(`delete @${target}? [y/N]: `)).trim().toLowerCase();
+      const confirm = (await ask(t('manage.deleteConfirm', { name: target }))).trim().toLowerCase();
       if (confirm === 'y') {
         deleteProfile(target);
-        printAbove(`${ANSI.green(`已删除档案 @${target}（密钥字段保留在 ~/.liwencode/env，可手动清理）。`)}\n`);
+        printAbove(`${ANSI.green(t('manage.deleted', { name: target }))}\n`);
       } else {
-        printAbove(`${ANSI.dim('已取消删除。')}\n`);
+        printAbove(`${ANSI.dim(t('manage.canceled'))}\n`);
       }
     }
   }
@@ -1600,12 +1662,12 @@ export async function runTui(opts: TuiOptions): Promise<number> {
     const sessions = await sessionStore.list({ limit: 5 });
     if (args[0] === undefined) {
       if (sessions.length === 0) {
-        printAbove('暂无历史会话。\n');
+        printAbove(`${t('resume.none')}\n`);
         return;
       }
-      printAbove('最近会话（/resume <id> 恢复）：\n');
+      printAbove(`${t('resume.recent')}\n`);
       for (const s of sessions) {
-        printAbove(`  ${s.sessionId.padEnd(42)} ${new Date(s.updatedAt).toLocaleString()}  ${s.entryCount} 条\n`);
+        printAbove(`  ${s.sessionId.padEnd(42)} ${new Date(s.updatedAt).toLocaleString()}  ${t('resume.entries', { n: s.entryCount })}\n`);
       }
       return;
     }
@@ -1640,9 +1702,9 @@ export async function runTui(opts: TuiOptions): Promise<number> {
   if (welcomeSupported(output.columns ?? 80, output.rows ?? 24)) {
     welcomeActive = true;
   } else {
-    printAbove(ANSI.bold('LIWENCode v0.1 交互模式') + '\n');
-    printAbove(ANSI.dim(`  权限档位: ${tierLongOf(tier.mode)}`) + '\n');
-    printAbove(ANSI.dim('  /help 查看命令 · @文件 引用上下文 · !命令 执行 shell · Ctrl+C 取消/退出') + '\n');
+    printAbove(ANSI.bold(t('banner.title')) + '\n');
+    printAbove(ANSI.dim(t('banner.tier', { tier: tierLongOf(tier.mode) })) + '\n');
+    printAbove(ANSI.dim(t('banner.hint')) + '\n');
   }
   redraw();
   // 欢迎面板蝴蝶扇翅动画 + 状态栏实时速度共用此定时器
@@ -1661,24 +1723,13 @@ export async function runTui(opts: TuiOptions): Promise<number> {
   return 0;
 }
 
-/** 欢迎面板用英文档位短标签（面板整体英文，避免 CJK 撑破右列对齐） */
-function tierEnShort(m: PermissionMode): string {
-  switch (m) {
-    case 'strict': return 'strict · confirm all';
-    case 'default': return 'partial · reads free';
-    case 'acceptEdits': return 'acceptEdits';
-    case 'plan': return 'plan · read-only';
-    case 'bypass': return 'bypass · no prompts';
-  }
-}
-
 function tierLongOf(mode: PermissionMode): string {
   switch (mode) {
-    case 'strict': return '严格档：一切操作均需确认（--HuangAura 升级读取免确认，--WenNova 全免确认）';
-    case 'default': return '部分权限（--HuangAura）：读取免确认，写/删/执行需确认';
-    case 'acceptEdits': return 'acceptEdits：工作区内写入免确认';
-    case 'plan': return 'plan：仅只读';
-    case 'bypass': return '完全权限（--WenNova）：文件增删改查读免确认（危险命令仍拒绝）';
+    case 'strict': return t('tier.long.strict');
+    case 'default': return t('tier.long.default');
+    case 'acceptEdits': return t('tier.long.acceptEdits');
+    case 'plan': return t('tier.long.plan');
+    case 'bypass': return t('tier.long.bypass');
   }
 }
 

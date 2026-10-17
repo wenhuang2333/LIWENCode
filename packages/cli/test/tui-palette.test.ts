@@ -1,17 +1,25 @@
-import { describe, expect, it } from 'vitest';
-import { COMMAND_HINTS, exactIndex, paletteWindow, suggestCommands } from '../src/tui/palette';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { commandHints, exactIndex, paletteWindow, suggestCommands } from '../src/tui/palette';
+import { setLanguage, type Lang } from '../src/i18n/index';
 import { LineEditor } from '../src/tui/editor';
 
 describe('tui/palette 指令联想', () => {
-  it('提示表：全部以 / 开头、名字唯一、英文 desc 非空、中文 brief 非空', () => {
-    const names = COMMAND_HINTS.map((h) => h.name);
-    expect(new Set(names).size).toBe(names.length);
-    for (const h of COMMAND_HINTS) {
-      expect(h.name.startsWith('/')).toBe(true);
-      expect(h.desc.length).toBeGreaterThan(5);
-      expect(h.desc.match(/[\u4e00-\u9fff]/)).toBeNull(); // desc 保持英文
-      expect(h.brief.match(/[\u4e00-\u9fff]/)).not.toBeNull(); // brief 为中文简短介绍
+  beforeEach(() => setLanguage('en'));
+
+  it('提示表：全部以 / 开头、名字唯一、文案随语言切换', () => {
+    for (const lang of ['en', 'zh'] as Lang[]) {
+      setLanguage(lang);
+      const hints = commandHints();
+      const names = hints.map((h) => h.name);
+      expect(new Set(names).size).toBe(names.length);
+      for (const h of hints) {
+        expect(h.name.startsWith('/')).toBe(true);
+        expect(h.brief.length).toBeGreaterThan(3);
+        const cjk = h.brief.match(/[\u4e00-\u9fff]/) !== null;
+        expect(cjk).toBe(lang === 'zh');
+      }
     }
+    setLanguage('en');
   });
 
   it('前缀过滤："/" 返回全部命令（不截断）、非 / 开头或带空格不触发', () => {
@@ -19,7 +27,7 @@ describe('tui/palette 指令联想', () => {
     expect(suggestCommands('')).toEqual([]);
     expect(suggestCommands('/model use deepseek')).toEqual([]); // 已带参数
     const all = suggestCommands('/');
-    expect(all.length).toBe(COMMAND_HINTS.length); // 全量，不再截断为固定条数
+    expect(all.length).toBe(commandHints().length); // 全量，不再截断为固定条数
     expect(all[0]!.name).toBe('/help');
     expect(all.map((h) => h.name)).toContain('/permission');
     expect(all.map((h) => h.name)).toContain('/permissions');

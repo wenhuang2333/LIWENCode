@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { parseSlash, helpText, COMMAND_DOCS } from '../src/slash';
+import { parseSlash, helpText, commandDocs } from '../src/slash';
+import { setLanguage } from '../src/i18n/index';
 import {
   catalogEntry,
   keyStatusOf,
@@ -22,6 +23,7 @@ let home: string;
 
 beforeEach(() => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'liwen-test-'));
+  setLanguage('en');
 });
 afterEach(() => {
   fs.rmSync(home, { recursive: true, force: true });
@@ -41,14 +43,17 @@ describe('slash parsing (FR-137)', () => {
 
   it('help lists all v0.1 commands and marks planned ones', () => {
     const text = helpText();
-    for (const cmd of COMMAND_DOCS.filter((c) => c.since === 'v0.1')) {
+    for (const cmd of commandDocs().filter((c) => c.since === 'v0.1')) {
       expect(text).toContain(cmd.name);
     }
     expect(text).toContain('/agents');
     expect(text).toContain('M3+');
     // single-command help
     expect(helpText('model')).toContain('/model');
+    expect(helpText('/nope')).toContain('Unknown command');
+    setLanguage('zh');
     expect(helpText('/nope')).toContain('未知命令');
+    expect(helpText()).toContain('可用命令');
   });
 });
 
@@ -92,7 +97,7 @@ describe('model-config (FR-121: secrets never in repo/sessions)', () => {
   });
 
   it('maskKey never leaks full values', () => {
-    expect(maskKey(undefined)).toBe('(未设置)');
+    expect(maskKey(undefined)).toBe('(not set)');
     expect(maskKey('sk-1234567890abcdef')).not.toContain('1234567890abcdef');
     expect(maskKey('sk-1234567890abcdef')).toContain('…');
   });

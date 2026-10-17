@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  PERMISSION_TIERS,
   parsePermissionArg,
   permissionModeShort,
   permissionTierPanel,
+  permissionTiers,
 } from '../src/slash';
+import { setLanguage } from '../src/i18n/index';
 
 describe('slash /permission 档位解析（三档 + 高级模式 + 别名）', () => {
   it('三个档位名正映射到引擎模式', () => {
@@ -36,20 +37,36 @@ describe('slash /permission 档位解析（三档 + 高级模式 + 别名）', (
 });
 
 describe('slash /permission 展示文本', () => {
-  it('短标签覆盖全部模式', () => {
-    expect(permissionModeShort('strict')).toBe('严格档：均需确认');
-    expect(permissionModeShort('default')).toBe('部分权限：读免确认');
-    expect(permissionModeShort('bypass')).toBe('完全权限：免确认');
-    expect(permissionModeShort('plan')).toBe('plan 只读');
+  beforeEach(() => setLanguage('en'));
+
+  it('默认英语短标签覆盖全部模式', () => {
+    expect(permissionModeShort('strict')).toBe('strict: ask for everything');
+    expect(permissionModeShort('default')).toBe('partial: reads allowed');
+    expect(permissionModeShort('bypass')).toBe('full: no confirmations');
+    expect(permissionModeShort('plan')).toBe('plan: read-only');
     expect(permissionModeShort('acceptEdits')).toBe('acceptEdits');
   });
 
-  it('速查面板列出三档并用 ● 标记当前档位', () => {
-    const panel = permissionTierPanel('default').join('\n');
-    for (const t of PERMISSION_TIERS) expect(panel).toContain(t.key);
-    expect(panel).toMatch(/● HuangAura/); // 当前档位带标记
-    expect(panel).not.toMatch(/● strict/);
-    expect(panel).toContain('/permission <档位> 直接切换');
+  it('中文模式短标签（/language zh）', () => {
+    setLanguage('zh');
+    expect(permissionModeShort('strict')).toBe('严格档：均需确认');
+    expect(permissionModeShort('default')).toBe('部分权限：读免确认');
+    expect(permissionModeShort('bypass')).toBe('完全权限：免确认');
+    setLanguage('en');
+  });
+
+  it('速查面板列出三档并用 ● 标记当前档位（两种语言）', () => {
+    for (const lang of ['en', 'zh'] as const) {
+      setLanguage(lang);
+      const panel = permissionTierPanel('default').join('\n');
+      for (const tier of permissionTiers()) expect(panel).toContain(tier.key);
+      expect(panel).toMatch(/● HuangAura/);
+      expect(panel).not.toMatch(/● strict/);
+    }
+    setLanguage('zh');
+    expect(permissionTierPanel('default').join('\n')).toContain('/permission <档位> 直接切换');
+    setLanguage('en');
+    expect(permissionTierPanel('default').join('\n')).toContain('/permission <tier> switches immediately');
   });
 
   it('高级模式（plan/acceptEdits）下也能标出当前模式', () => {

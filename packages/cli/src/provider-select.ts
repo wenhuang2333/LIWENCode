@@ -4,6 +4,7 @@ import { MockProvider } from '@liwencode/testing';
 import type { Message } from '@liwencode/core';
 import type { CliArgs } from './args.js';
 import { catalogEntry, getProfile, resolveDefaultModel } from './model-config.js';
+import { t } from './i18n/index.js';
 
 /**
  * Provider resolution for the CLI. `mock:` runs fully offline; real providers
@@ -21,7 +22,7 @@ export function parseModelSpec(spec: string | undefined): ProviderSpec {
   const raw = spec ?? process.env.LIWEN_MODEL ?? 'mock:default';
   const idx = raw.indexOf(':');
   if (idx <= 0) {
-    throw new Error(`--model must be <provider>:<model>, got '${raw}' (LW-CLI-001)`);
+    throw new Error(t('args.modelSpec', { value: raw }));
   }
   return { provider: raw.slice(0, idx), model: raw.slice(idx + 1) };
 }
@@ -29,7 +30,7 @@ export function parseModelSpec(spec: string | undefined): ProviderSpec {
 function requireKey(envName: string): string {
   const value = process.env[envName];
   if (value === undefined || value === '') {
-    throw new Error(`provider requires ${envName} to be set (LW-CFG-002). Use 'mock:' for offline runs, /model config to set it up, or liwen doctor.`);
+    throw new Error(t('provider.needKeyEnv', { env: envName }));
   }
   return value;
 }
@@ -41,9 +42,7 @@ export function buildProvider(spec: ProviderSpec): Provider & { model: string } 
   }
   const entry = catalogEntry(spec.provider);
   if (entry === undefined) {
-    throw new Error(
-      `unknown provider '${spec.provider}' (LW-CLI-001). Supported: ${catalogEntryList()}. Run /setup for guided setup or /model config.`,
-    );
+    throw new Error(t('provider.unknown', { provider: spec.provider, list: catalogEntryList() }));
   }
   const runtime = nodeRuntime();
   switch (entry.kind) {
@@ -74,7 +73,7 @@ export function buildProvider(spec: ProviderSpec): Provider & { model: string } 
 function buildProfileProvider(profileName: string, modelOverride: string): Provider & { model: string } {
   const profile = getProfile(profileName);
   if (profile === undefined) {
-    throw new Error(`model profile '@${profileName}' not found (LW-CLI-001). Run /setup to create it or /manage to list profiles.`);
+    throw new Error(t('provider.profileNotFound', { name: profileName }));
   }
   const model = modelOverride !== '' && modelOverride !== 'default' ? modelOverride : profile.model;
   const runtime = nodeRuntime();
@@ -95,13 +94,13 @@ function buildProfileProvider(profileName: string, modelOverride: string): Provi
     case 'gemini':
       throw new LiwenError({
         code: 'LW-PRV-010',
-        message: `profile '@${profileName}' uses protocol '${profile.protocol}' whose adapter is not implemented yet (planned M2). Re-run /setup with Anthropic or OpenAI ChatCompletion.`,
+        message: t('provider.protocolNotImplemented', { name: profileName, protocol: profile.protocol }),
       });
   }
 }
 
 function catalogEntryList(): string {
-  return 'mock, deepseek, openai-compatible, anthropic';
+  return t('provider.list');
 }
 
 export function resolveProvider(
@@ -126,7 +125,7 @@ function defaultMockScript(): Message[] {
     {
       id: 'mock_1',
       role: 'assistant',
-      content: [{ type: 'text', text: 'MockProvider：未配置剧本。设置 LIWEN_MOCK_SCRIPT=<JSON 消息数组> 可获得确定性输出；或用 /model config 配置真实模型。' }],
+      content: [{ type: 'text', text: t('mock.noScript') }],
       meta: { createdAt: 0 },
     },
   ];

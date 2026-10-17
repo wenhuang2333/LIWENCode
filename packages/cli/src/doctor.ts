@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import { parseModelSpec } from './provider-select.js';
+import { t } from './i18n/index.js';
 
 /**
  * liwen doctor (FR-173): runs with NO provider keys. Checks Node version,
@@ -19,8 +20,8 @@ export function runDoctor(cwd: string): DoctorCheck[] {
   const major = Number(process.versions.node.split('.')[0]);
   checks.push(
     major >= 22
-      ? { name: 'node', status: 'ok', detail: `Node ${process.versions.node} (≥22 required)` }
-      : { name: 'node', status: 'fail', detail: `Node ${process.versions.node} is below the required 22 LTS` },
+      ? { name: 'node', status: 'ok', detail: t('doctor.nodeOk', { version: process.versions.node }) }
+      : { name: 'node', status: 'fail', detail: t('doctor.nodeFail', { version: process.versions.node }) },
   );
 
   checks.push({ name: 'platform', status: 'ok', detail: `${process.platform} ${process.arch}` });
@@ -30,12 +31,12 @@ export function runDoctor(cwd: string): DoctorCheck[] {
     const probe = `${cwd}/.liwencode-doctor-probe`;
     fs.writeFileSync(probe, '');
     fs.unlinkSync(probe);
-    checks.push({ name: 'workspace-writable', status: 'ok', detail: 'can create files' });
+    checks.push({ name: 'workspace-writable', status: 'ok', detail: t('doctor.writableOk') });
   } catch (e) {
     checks.push({
       name: 'workspace-writable',
       status: 'fail',
-      detail: `cannot write: ${e instanceof Error ? e.message : String(e)}`,
+      detail: t('doctor.writableFail', { error: e instanceof Error ? e.message : String(e) }),
     });
   }
 
@@ -46,14 +47,14 @@ export function runDoctor(cwd: string): DoctorCheck[] {
   checks.push({
     name: 'config-user',
     status: userConfigExists ? 'ok' : 'warn',
-    detail: userConfigExists ? `${userConfig} (present)` : `${userConfig} (absent — defaults apply)`,
+    detail: userConfigExists ? t('doctor.configPresent', { path: userConfig }) : t('doctor.configAbsent', { path: userConfig }),
   });
   checks.push({
     name: 'config-project',
     status: projectConfigExists ? 'warn' : 'ok',
     detail: projectConfigExists
-      ? `${projectConfig} present — first-use trust check applies (BR-043, LW-CFG-003)`
-      : `${projectConfig} (absent)`,
+      ? t('doctor.projectPresent', { path: projectConfig })
+      : t('doctor.projectAbsent', { path: projectConfig }),
   });
 
   const providers: [string, string][] = [
@@ -66,7 +67,7 @@ export function runDoctor(cwd: string): DoctorCheck[] {
     checks.push({
       name: `provider-${label}`,
       status: set ? 'ok' : 'warn',
-      detail: set ? `${envName} is set (value hidden)` : `${envName} not set — use mock: provider for offline runs`,
+      detail: set ? t('doctor.keySet', { env: envName }) : t('doctor.keyUnset', { env: envName }),
     });
   }
 

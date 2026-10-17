@@ -14,6 +14,7 @@
  */
 
 import { AGENT_ROLES, ROLE_META, type AgentRole } from '../model-config.js';
+import { t } from '../i18n/index.js';
 
 export type GroupStepId = 'target' | 'name' | 'hyaki' | 'sota' | 'common';
 
@@ -24,15 +25,21 @@ export interface GroupStep {
   hint: string;
 }
 
-export const GROUP_STEPS: readonly GroupStep[] = [
-  { id: 'target', kind: 'select', label: 'agent group', hint: 'pick an existing group to edit, or create a new one' },
-  { id: 'name', kind: 'text', label: 'group name', hint: 'e.g. cheap-pair, full-stack, solo' },
-  { id: 'hyaki', kind: 'role', label: 'hyaki · summarize', hint: 'large text intake & summarization (low-cost advised)' },
-  { id: 'sota', kind: 'role', label: 'sota · think', hint: 'thinking, planning & review (high-capability advised)' },
-  { id: 'common', kind: 'role', label: 'common · execute', hint: 'implementation & execution (balanced advised)' },
-];
+/** 步骤定义（标签/提示按当前 CLI 语言解析；顺序与 id 固定） */
+export function groupSteps(): GroupStep[] {
+  return [
+    { id: 'target', kind: 'select', label: t('groups.step.target'), hint: t('groups.hint.target') },
+    { id: 'name', kind: 'text', label: t('groups.step.name'), hint: t('groups.hint.name') },
+    { id: 'hyaki', kind: 'role', label: t('groups.step.hyaki'), hint: t('groups.hint.hyaki') },
+    { id: 'sota', kind: 'role', label: t('groups.step.sota'), hint: t('groups.hint.sota') },
+    { id: 'common', kind: 'role', label: t('groups.step.common'), hint: t('groups.hint.common') },
+  ];
+}
 
-export const NEW_GROUP_SENTINEL = '＋ create a new group';
+/** 新建群选项的显示文本（随语言变化） */
+export function newGroupSentinel(): string {
+  return t('groups.newSentinel');
+}
 
 /** 列表窗口：select/role 步选项过多时只显示一段 */
 export const OPTION_WINDOW = 8;
@@ -81,14 +88,14 @@ export function newGroupWizard(editing?: string, prefill?: GroupAnswers): GroupW
 }
 
 export function stepOf(state: GroupWizardState): GroupStep | undefined {
-  return GROUP_STEPS[state.stepIdx];
+  return groupSteps()[state.stepIdx];
 }
 
 /** 当前步选项（select=群列表；role=模型引用列表） */
 export function optionsOf(state: GroupWizardState): string[] {
   const step = stepOf(state);
   if (step === undefined) return [];
-  if (step.id === 'target') return [...deps.groupNames(), NEW_GROUP_SENTINEL];
+  if (step.id === 'target') return [...deps.groupNames(), t('groups.newSentinel')];
   if (step.kind === 'role') return deps.modelRefs();
   return [];
 }
@@ -112,7 +119,7 @@ export function moveSelection(state: GroupWizardState, delta: number): GroupWiza
 export function questionOf(state: GroupWizardState): string {
   const step = stepOf(state);
   if (step === undefined) return '';
-  return `[${state.stepIdx + 1}/${GROUP_STEPS.length}] ${step.label} — ${step.hint}`;
+  return `[${state.stepIdx + 1}/${groupSteps().length}] ${step.label} — ${step.hint}`;
 }
 
 /** 提交当前步；done=true 表示三角色齐备可保存 */
@@ -123,8 +130,8 @@ export function submitStep(state: GroupWizardState, text: string): { state: Grou
 
   if (step.id === 'target') {
     const opts = optionsOf(state);
-    const picked = opts[state.selIdx] ?? opts[0] ?? NEW_GROUP_SENTINEL;
-    if (picked === NEW_GROUP_SENTINEL) {
+    const picked = opts[state.selIdx] ?? opts[0] ?? newGroupSentinel();
+    if (picked === newGroupSentinel()) {
       const next: GroupWizardState = { stepIdx: 1, answers: {}, selIdx: 0, scroll: 0 };
       return { state: next, done: false };
     }
@@ -134,12 +141,12 @@ export function submitStep(state: GroupWizardState, text: string): { state: Grou
 
   if (step.id === 'name') {
     const name = value !== '' ? value : state.editing ?? '';
-    if (name === '') return { state: { ...state, error: 'group name is required' }, done: false };
+    if (name === '') return { state: { ...state, error: t('groups.err.nameRequired') }, done: false };
     if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name) || name.length > 48) {
-      return { state: { ...state, error: 'group name: letters/digits/-/_/. only, ≤48 chars' }, done: false };
+      return { state: { ...state, error: t('groups.err.nameInvalid') }, done: false };
     }
     if (name !== state.editing && deps.groupNames().includes(name)) {
-      return { state: { ...state, error: `group '${name}' already exists (pick it in step 1 to edit)` }, done: false };
+      return { state: { ...state, error: t('groups.err.nameExists', { name }) }, done: false };
     }
     const { error: _e, ...rest } = state;
     return { state: advance({ ...rest, answers: { ...state.answers, name } }), done: false };
@@ -148,11 +155,11 @@ export function submitStep(state: GroupWizardState, text: string): { state: Grou
   if (step.kind === 'role') {
     const opts = optionsOf(state);
     const picked = opts[state.selIdx] ?? opts[0] ?? '';
-    if (picked === '') return { state: { ...state, error: 'no model available — run /setup first' }, done: false };
+    if (picked === '') return { state: { ...state, error: t('groups.err.noModel') }, done: false };
     const { error: _e, ...rest } = state;
     const answers = { ...state.answers, [step.id]: picked } as GroupAnswers;
     const next = advance({ ...rest, answers });
-    const done = next.stepIdx >= GROUP_STEPS.length;
+    const done = next.stepIdx >= groupSteps().length;
     return { state: next, done };
   }
   return { state, done: false };
@@ -162,7 +169,7 @@ function advance(state: GroupWizardState): GroupWizardState {
   const nextIdx = state.stepIdx + 1;
   const next = { ...state, stepIdx: nextIdx, selIdx: 0, scroll: 0 };
   // 进入角色步时若已有预填值（改群场景），高亮对应模型
-  const step = GROUP_STEPS[nextIdx];
+  const step = groupSteps()[nextIdx];
   if (step?.kind === 'role') {
     const opts = optionsOf(next);
     const idx = opts.indexOf(next.answers[step.id as AgentRole] ?? '');
@@ -195,7 +202,7 @@ export function renderGroupWizard(state: GroupWizardState, cols: number): string
   const panelW = Math.min(cols, 68);
   const innerW = panelW - 4;
   const lines: string[] = [];
-  let title = state.editing !== undefined ? ` set agents · edit ${state.editing} ` : ' set agents ';
+  let title = ` ${state.editing !== undefined ? t('groups.titleEdit', { name: state.editing }) : t('groups.title')} `;
   // 窄终端保护：标题超宽时截断，fill 不得为负（repeat 负数会抛 RangeError）
   if (plainLen(title) > panelW - 6) title = title.slice(0, Math.max(1, panelW - 7));
   const fill = Math.max(0, panelW - 2 - plainLen(title));
@@ -205,13 +212,13 @@ export function renderGroupWizard(state: GroupWizardState, cols: number): string
     lines.push(`│ ${left}${right}${' '.repeat(pad)} │`);
   };
 
-  for (let i = 0; i < GROUP_STEPS.length; i++) {
-    const step = GROUP_STEPS[i]!;
+  for (let i = 0; i < groupSteps().length; i++) {
+    const step = groupSteps()[i]!;
     const roleColor = step.kind === 'role' ? ROLE_META[step.id as AgentRole].color : 45;
     const done = i < state.stepIdx;
     const current = i === state.stepIdx;
     const answer = answerOf(state, step.id);
-    const rail = i < GROUP_STEPS.length - 1 ? c256(step.kind === 'role' ? ROLE_META[step.id as AgentRole].color : 45, '│') : ' ';
+    const rail = i < groupSteps().length - 1 ? c256(step.kind === 'role' ? ROLE_META[step.id as AgentRole].color : 45, '│') : ' ';
 
     if (current) {
       pushRow(`${c256(roleColor, '◉')}  `, bold(step.label));
@@ -219,7 +226,7 @@ export function renderGroupWizard(state: GroupWizardState, cols: number): string
         const opts = optionsOf(state);
         const start = state.scroll;
         const end = Math.min(opts.length, start + OPTION_WINDOW);
-        if (start > 0) pushRow(`  ${c256(roleColor, '│')}     ${dim(`… ${start} above`)}`);
+        if (start > 0) pushRow(`  ${c256(roleColor, '│')}     ${dim(t('groups.windowAbove', { n: start }))}`);
         for (let oi = start; oi < end; oi++) {
           const sel = oi === state.selIdx;
           const label = opts[oi]!;
@@ -227,7 +234,7 @@ export function renderGroupWizard(state: GroupWizardState, cols: number): string
           const text = sel ? bold(label) : dim(label);
           pushRow(`  ${c256(roleColor, '│')}     ${marker}${text}`);
         }
-        if (end < opts.length) pushRow(`  ${c256(roleColor, '│')}     ${dim(`… ${opts.length - end} below`)}`);
+        if (end < opts.length) pushRow(`  ${c256(roleColor, '│')}     ${dim(t('groups.windowBelow', { n: opts.length - end }))}`);
       }
       if (state.error !== undefined) {
         pushRow(`  ${c256(roleColor, '│')}     ${c256(196, state.error.slice(0, innerW - 10))}`);
@@ -237,9 +244,9 @@ export function renderGroupWizard(state: GroupWizardState, cols: number): string
     } else {
       pushRow(`${c256(roleColor, '○')}  `, dim(step.label));
     }
-    if (i < GROUP_STEPS.length - 1) pushRow(`  ${rail}`);
+    if (i < groupSteps().length - 1) pushRow(`  ${rail}`);
   }
-  pushRow(dim('Enter confirm · ↑↓ select · Esc cancel'));
+  pushRow(dim(t('groups.footer')));
   lines.push(`╰${'─'.repeat(panelW - 2)}╯`);
   return lines;
 }
@@ -252,7 +259,7 @@ function answerOf(state: GroupWizardState, id: GroupStepId): string | undefined 
 /** 群摘要（保存后打印） */
 export function groupSummary(name: string, answers: GroupAnswers): string[] {
   return AGENT_ROLES.map((role) => {
-    const ref = answers[role] ?? '(unset)';
+    const ref = answers[role] ?? t('groups.unset');
     const meta = ROLE_META[role];
     return `  ${c256(meta.color, meta.title.padEnd(7))} ${ref.padEnd(24)} ${dim(meta.desc)}`;
   });

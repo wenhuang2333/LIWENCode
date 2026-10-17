@@ -5,6 +5,7 @@
  */
 
 import type { Runtime } from '@liwencode/core';
+import { t } from './i18n/index.js';
 
 /** @path 展开：把 @引用的文件内容附加到提示词（最多 8 个文件，每个截断 500 行） */
 export async function expandAtPaths(prompt: string, cwd: string, runtime: Runtime): Promise<string> {
@@ -17,9 +18,9 @@ export async function expandAtPaths(prompt: string, cwd: string, runtime: Runtim
       const content = await runtime.fs.readFile(abs);
       const lines = content.split('\n');
       const truncated = lines.slice(0, 500).join('\n');
-      parts.push(`--- @${ref} ---\n${truncated}${lines.length > 500 ? '\n… [截断至 500 行]' : ''}`);
+      parts.push(`--- @${ref} ---\n${truncated}${lines.length > 500 ? `\n${t('repl.truncated')}` : ''}`);
     } catch {
-      parts.push(`--- @${ref} --- (文件不存在或不可读，已跳过)`);
+      parts.push(`--- @${ref} --- ${t('repl.fileSkipped')}`);
     }
   }
   return parts.join('\n\n');
